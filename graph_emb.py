@@ -13,78 +13,49 @@ os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
 T = 5 
+MAX_NEIGHBORS_NUM = 50
 relu_layer_num = 3
 emb_size = 64
-ACFG_node_dim = 4
+attributes_dim = 4 # d
 
 def simga_function(input_l_v, P_n):
+    # N: number of nodes
     output = input_l_v
     for idx in range(relu_layer_num):
-        output = tf.matmul(P_n[idx], tf.nn.relu(output), transpose_b=True) # [p, p] x [p, 1]= [p, 1]
-        output = tf.transpose(output) # [1, p]
+        output = tf.matmul(P_n[idx], tf.nn.relu(output), transpose_b=True) # [p, p] x [p, N]= [p, N]
+        output = tf.transpose(output) # [N, p]
     return output
 
 
-def graph_emb(graphs):
-    # Graph:
-    #   nodes: {id, code, neighbors}
-    #   edges: {src, dest}
-    with tf.device('/cpu:0'):
-        x_num_nodes = tf.placeholder(tf.int32)
-        y_num_nodes = tf.placeholder(tf.int32)
-        x_neighbors = tf.placeholder(tf.int32)
-        y_neighbors = tf.placeholder(tf.int32)
-
+def build_emb_graph(neighbors, attributes, u_init):
+    with tf.device('/gpu:0'):
         # Static parameters which are shared by each cfg 
-        W1 = tf.get_variable("W1", [ACFG_node_dim, emb_size], initializer=tf.random_normal_initializer()) # d x p
+        W1 = tf.get_variable("W1", [attributes_dim, emb_size], initializer=tf.random_normal_initializer()) # d x p
         W2 = tf.get_variable("W2", [emb_size, emb_size], initializer=tf.random_normal_initializer()) # p x p
         P_n = []
         for idx in range(relu_layer_num):
             P_n.append(tf.get_variable("P_n_{}".format(idx), [emb_size, emb_size], initializer=tf.random_normal_initializer()))
 
-        graphs_embs = []
-        # Build graphs for each cfg
-        for idx, graph in enumerate(graphs):
-            print("Current graph idx: {}".format(idx))
-            if idx == 50:
-                break
-            # Dynamic parameters for each cfg
-            u_v = tf.Variable(tf.zeros([len(graph.nodes), emb_size]), name="u_v_{}".format(idx))
+        # Dynamic parameters for each cfg
+        u_v = u_init
 
-            for t in range(T):
-                u_v_t_list = [None] * len(graph.nodes)
-                for v in graph.nodes:
-                    neighbor_v = list(v.neighbors)
-                    if len(neighbor_v) > 0:
-                        neighbor_u = tf.nn.embedding_lookup(u_v, neighbor_v)
+        for t in range(T):
+            neighbors_u = tf.nn.embedding_lookup(u_v, neighbors)
+            l_vs = tf.reduce_sum(neighbors_u, 1)
 
-                        l_v = tf.reshape(tf.reduce_sum(neighbor_u, 0), [-1, emb_size])
-
-                        sigma_output = simga_function(l_v, P_n)
-                        u_v_t = tf.tanh(
-                                    tf.add(
-                                        tf.matmul(
-                                            W1,
-                                            tf.stack([v.attributes]), transpose_a=True, transpose_b=True
-                                        )
-                                        , tf.transpose(sigma_output)
-                                    )
-                                )
-                        u_v_t_list[v.node_id] = tf.transpose(u_v_t)
-                    else:
-                        u_v_t_list[v.node_id] = tf.nn.embedding_lookup(u_v, v.node_id)
-                u_v = tf.reshape(tf.stack(u_v_t_list), [-1, emb_size])
-            graph_emb = tf.matmul(W2, tf.reshape(tf.reduce_sum(u_v, 0), [-1, emb_size]), transpose_b=True)
-            graphs_embs.append(graph_emb)
-    return tf.reshape(tf.stack(graphs_embs), [-1, emb_size])
-
-def build_all_graph_list(dataset):
-    all_graph = []
-    for sample in dataset['sample']:
-        for g in sample:
-            if g not in all_graph:
-                all_graph.append(g)
-    return all_graph
+            sigma_output = simga_function(l_vs, P_n) # [N, p]
+            u_v_transposed = tf.tanh(
+                        tf.add(
+                            tf.matmul(
+                                W1,
+                                attributes, transpose_a=True, transpose_b=True
+                            ) # [p, d] x [d, N] = [p, N]
+                            , tf.transpose(sigma_output) # [p, N]
+                        )
+                    ) # [p, N]
+            u_v = tf.transpose(u_v_transposed) # [N, p]
+        graph_emb = tf.transpose(tf.matmul(W2, tf.reshape(tf.reduce_sum(u_v[1:], 0), [-1, emb_size]), transpose_b=True)) # ([p, p] x [p, 1])^T = [p, 1]^T = [1, p]
+    return graph_emb
 
 
 def shuffle_data(dataset):
@@ -93,6 +64,19 @@ def shuffle_data(dataset):
     shuffle(idx_list)
     return np.asarray(dataset['sample'])[idx_list], np.asarray(dataset['label'])[idx_list]
 
+
+def get_graph_info_mat(graph):
+    neighbors = []
+    attributes = []
+
+    for node in graph.nodes:
+        if MAX_NEIGHBORS_NUM < len(node.neighbors):
+            raise ValueError('Number of neightbors is larger than MAX_NEIGHBORS_NUM: {} > MAX_NEIGHBORS_NUM'.format(len(node.neighbors)))
+        ns = np.pad(list(node.neighbors), (0, MAX_NEIGHBORS_NUM - len(node.neighbors)), 'constant', constant_values=0)
+        neighbors.append(ns)
+        attributes.append(node.attributes)
+
+    return neighbors, attributes, np.zeros((len(graph.nodes), emb_size))
 
 def main(argv):
     if len(argv) != 2:
@@ -108,59 +92,54 @@ def main(argv):
     while cur_epoch < num_epoch:
         samples, labels = shuffle_data(learning_data['train'])
 
-        all_graphs = build_all_graph_list(learning_data['train'])
-
         with tf.variable_scope("siamese") as scope:
-            x_graph_id = tf.placeholder(tf.int32)
-            y_graph_id = tf.placeholder(tf.int32)
+            neighbors_left = tf.placeholder(tf.int32, shape=(None, MAX_NEIGHBORS_NUM)) # N x MAX_NEIGHBORS_NUM
+            attributes_left = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
+            u_init_left = tf.placeholder(tf.float32, shape=(None, emb_size)) # N x p
+            graph_emb_left = build_emb_graph(neighbors_left, attributes_left, u_init_left) # N x p
+
+            scope.reuse_variables()
+
+            neighbors_right = tf.placeholder(tf.int32, shape=(None, MAX_NEIGHBORS_NUM)) # N x MAX_NEIGHBORS_NUM
+            attributes_right = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
+            u_init_right = tf.placeholder(tf.float32, shape=(None, emb_size)) # N x p
+            graph_emb_right = build_emb_graph(neighbors_right, attributes_right, u_init_right) # N x p
+
             label = tf.placeholder(tf.float32)
-            graphs_embs = graph_emb(all_graphs)
 
-            x = tf.nn.embedding_lookup(graphs_embs, [x_graph_id])
-            y = tf.nn.embedding_lookup(graphs_embs, [y_graph_id])
-
-            x = tf.transpose(x)
-            y = tf.transpose(y)
-
-            norm_x = tf.nn.l2_normalize(x, 0)
-            norm_y = tf.nn.l2_normalize(y, 0)
-            cos_similarity = tf.reduce_sum(tf.multiply(norm_x, norm_y))
-            print(cos_similarity)
+            norm_emb_left = tf.nn.l2_normalize(graph_emb_left, 0)
+            norm_emb_right = tf.nn.l2_normalize(graph_emb_right, 0)
+            cos_similarity = tf.reduce_sum(tf.multiply(norm_emb_left, norm_emb_right))
             loss_op = tf.square(cos_similarity - label)
             train_op = tf.train.GradientDescentOptimizer(0.03).minimize(loss_op)
             init_op = tf.global_variables_initializer()
 
-        cur_epoch = 0
-        epoch_loss = 0
-        num_graph = 100
-        real_loss = epoch_loss / len(samples)
+        num_epoch = 100
 
         with tf.Session() as sess:
             sess.run(init_op)
             
-            for i in range(50):
+            epoch_loss = -1
+            for cur_epoch in range(num_epoch):
                 loss_sum = 0
                 cur_step = 0
-                for sample, label_ in zip(samples, labels):
-                    x_idx = all_graphs.index(sample[0])
-                    y_idx = all_graphs.index(sample[1])
-                    if not (x_idx < num_graph and y_idx < num_graph):
-                        continue
-                    _, loss = sess.run([train_op, loss_op], {x_graph_id: x_idx, y_graph_id: y_idx, label: label_})
+                for sample, ground_truth in zip(samples, labels):
+                    # Build neighbors, attributes, and u_init
+                    neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0])
+                    neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1])
+
+                    _, loss = sess.run([train_op, loss_op], {
+                        neighbors_left: neighbors_l, attributes_left: attributes_l, u_init_left: u_init_l,
+                        neighbors_right: neighbors_r, attributes_right: attributes_r, u_init_right: u_init_r,
+                        label: ground_truth
+                        })
                     sys.stdout.write('Epoch: {:10}, Loss: {:15.10f}, Step: {:10}     \r'.format(cur_epoch, epoch_loss, cur_step))
                     sys.stdout.flush()
                     cur_step += 1 
                     loss_sum += loss
-                epoch_loss += (loss_sum / len(samples))
+                epoch_loss = (loss_sum / len(samples))
                 cur_epoch += 1
 
-            _start_shell(locals())
-
-
-
-    f_win.close()
-    f_linux.close()
-    f_arm.close()
 
 if __name__ == '__main__':
     main(sys.argv)
