@@ -14,7 +14,7 @@ os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
 T = 5 
 MAX_NEIGHBORS_NUM = 50
-relu_layer_num = 3
+relu_layer_num = 2
 emb_size = 64
 attributes_dim = 4 # d
 
@@ -25,7 +25,6 @@ def simga_function(input_l_v, P_n):
         output = tf.matmul(P_n[idx], tf.nn.relu(output), transpose_b=True) # [p, p] x [p, N]= [p, N]
         output = tf.transpose(output) # [N, p]
     return output
-
 
 def build_emb_graph(neighbors, attributes, u_init):
     with tf.device('/gpu:0'):
@@ -38,11 +37,11 @@ def build_emb_graph(neighbors, attributes, u_init):
 
         # Dynamic parameters for each cfg
         u_v = u_init
+        u_v.trainable = False
 
         for t in range(T):
             neighbors_u = tf.nn.embedding_lookup(u_v, neighbors)
             l_vs = tf.reduce_sum(neighbors_u, 1)
-
             sigma_output = simga_function(l_vs, P_n) # [N, p]
             u_v_transposed = tf.tanh(
                         tf.add(
@@ -54,8 +53,9 @@ def build_emb_graph(neighbors, attributes, u_init):
                         )
                     ) # [p, N]
             u_v = tf.transpose(u_v_transposed) # [N, p]
+            u_v.trainable = False
         graph_emb = tf.transpose(tf.matmul(W2, tf.reshape(tf.reduce_sum(u_v[1:], 0), [-1, emb_size]), transpose_b=True)) # ([p, p] x [p, 1])^T = [p, 1]^T = [1, p]
-    return graph_emb
+    return graph_emb, u_v
 
 
 def shuffle_data(dataset):
@@ -69,6 +69,8 @@ def get_graph_info_mat(graph):
     neighbors = []
     attributes = []
 
+    neighbors.append(np.zeros(MAX_NEIGHBORS_NUM))
+    attributes.append(np.zeros(attributes_dim))
     for node in graph.nodes:
         if MAX_NEIGHBORS_NUM < len(node.neighbors):
             raise ValueError('Number of neightbors is larger than MAX_NEIGHBORS_NUM: {} > MAX_NEIGHBORS_NUM'.format(len(node.neighbors)))
@@ -96,14 +98,14 @@ def main(argv):
             neighbors_left = tf.placeholder(tf.int32, shape=(None, MAX_NEIGHBORS_NUM)) # N x MAX_NEIGHBORS_NUM
             attributes_left = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
             u_init_left = tf.placeholder(tf.float32, shape=(None, emb_size)) # N x p
-            graph_emb_left = build_emb_graph(neighbors_left, attributes_left, u_init_left) # N x p
+            graph_emb_left, u_v_left = build_emb_graph(neighbors_left, attributes_left, u_init_left) # N x p
 
             scope.reuse_variables()
 
             neighbors_right = tf.placeholder(tf.int32, shape=(None, MAX_NEIGHBORS_NUM)) # N x MAX_NEIGHBORS_NUM
             attributes_right = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
             u_init_right = tf.placeholder(tf.float32, shape=(None, emb_size)) # N x p
-            graph_emb_right = build_emb_graph(neighbors_right, attributes_right, u_init_right) # N x p
+            graph_emb_right, u_v_right = build_emb_graph(neighbors_right, attributes_right, u_init_right) # N x p
 
             label = tf.placeholder(tf.float32)
 
@@ -114,7 +116,7 @@ def main(argv):
             train_op = tf.train.GradientDescentOptimizer(0.03).minimize(loss_op)
             init_op = tf.global_variables_initializer()
 
-        num_epoch = 100
+        num_epoch = 50
 
         with tf.Session() as sess:
             sess.run(init_op)
@@ -123,6 +125,23 @@ def main(argv):
             for cur_epoch in range(num_epoch):
                 loss_sum = 0
                 cur_step = 0
+                correct = 0
+                samples, labels = shuffle_data(learning_data['test'])
+                for sample, ground_truth in zip(samples, labels):
+                    neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0])
+                    neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1])
+                    sim = sess.run(cos_similarity, {
+                        neighbors_left: neighbors_l, attributes_left: attributes_l, u_init_left: u_init_l,
+                        neighbors_right: neighbors_r, attributes_right: attributes_r, u_init_right: u_init_r,
+                    })
+
+                    if sim > 0 and ground_truth == 1:
+                        correct += 1
+                    elif sim < 0 and ground_truth == -1:
+                        correct += 1
+
+
+                samples, labels = shuffle_data(learning_data['train'])
                 for sample, ground_truth in zip(samples, labels):
                     # Build neighbors, attributes, and u_init
                     neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0])
@@ -132,13 +151,24 @@ def main(argv):
                         neighbors_left: neighbors_l, attributes_left: attributes_l, u_init_left: u_init_l,
                         neighbors_right: neighbors_r, attributes_right: attributes_r, u_init_right: u_init_r,
                         label: ground_truth
-                        })
-                    sys.stdout.write('Epoch: {:10}, Loss: {:15.10f}, Step: {:10}     \r'.format(cur_epoch, epoch_loss, cur_step))
+                    })
+                    sys.stdout.write('Epoch: {:10}, Loss: {:15.10f}, Step: {:10}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, correct/len(learning_data['test']['sample'])))
                     sys.stdout.flush()
                     cur_step += 1 
                     loss_sum += loss
                 epoch_loss = (loss_sum / len(samples))
                 cur_epoch += 1
+
+
+#                 neighbors_l, attributes_l, u_init_l = get_graph_info_mat(samples[0][0])
+#                 neighbors_r, attributes_r, u_init_r = get_graph_info_mat(samples[0][1])
+#                 u_v_l, u_v_r = sess.run([u_v_left, u_v_right], {
+#                     neighbors_left: neighbors_l, attributes_left: attributes_l, u_init_left: u_init_l,
+#                     neighbors_right: neighbors_r, attributes_right: attributes_r, u_init_right: u_init_r,
+#                     label: ground_truth
+#                 })
+#                 print(u_v_l)
+#                 print(u_v_r)
 
 
 if __name__ == '__main__':
