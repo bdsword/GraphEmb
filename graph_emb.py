@@ -37,7 +37,6 @@ def build_emb_graph(neighbors, attributes, u_init):
 
         # Dynamic parameters for each cfg
         u_v = u_init
-        u_v.trainable = False
 
         for t in range(T):
             neighbors_u = tf.nn.embedding_lookup(u_v, neighbors)
@@ -53,9 +52,8 @@ def build_emb_graph(neighbors, attributes, u_init):
                         )
                     ) # [p, N]
             u_v = tf.transpose(u_v_transposed) # [N, p]
-            u_v.trainable = False
         graph_emb = tf.transpose(tf.matmul(W2, tf.reshape(tf.reduce_sum(u_v[1:], 0), [-1, emb_size]), transpose_b=True)) # ([p, p] x [p, 1])^T = [p, 1]^T = [1, p]
-    return graph_emb, u_v, W1, W2, P_n
+    return graph_emb
 
 
 def shuffle_data(dataset):
@@ -81,78 +79,104 @@ def get_graph_info_mat(graph):
     return neighbors, attributes, np.zeros((len(graph.nodes), emb_size))
 
 def main(argv):
-    if len(argv) != 2:
-        print('Usage:\n\tgraph_emb.py <train pickle data>')
+    if len(argv) != 5:
+        print('Usage:\n\tgraph_emb.py <train pickle data> <saver folder> <load model> <start ipython>')
         sys.exit(-1)
 
-    with open(sys.argv[1], 'rb') as f:
+    if not os.path.isdir(argv[2]):
+        print('Saver folder should be a valid folder.')
+        sys.exit(-2)
+    saver_path = argv[2]
+    load_model = int(argv[3])
+    start_ipython = int(argv[4])
+
+    with open(argv[1], 'rb') as f:
         learning_data = pickle.load(f)
 
+    if start_ipython == 0:
+        with tf.variable_scope("siamese") as scope:
+            # Build Training Graph
+            neighbors_left = tf.placeholder(tf.int32, shape=(None, MAX_NEIGHBORS_NUM)) # N x MAX_NEIGHBORS_NUM
+            attributes_left = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
+            u_init_left = tf.placeholder(tf.float32, shape=(None, emb_size)) # N x p
+            graph_emb_left = build_emb_graph(neighbors_left, attributes_left, u_init_left) # N x p
 
-    with tf.variable_scope("siamese") as scope:
-        neighbors_left = tf.placeholder(tf.int32, shape=(None, MAX_NEIGHBORS_NUM)) # N x MAX_NEIGHBORS_NUM
-        attributes_left = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
-        u_init_left = tf.placeholder(tf.float32, shape=(None, emb_size)) # N x p
-        graph_emb_left, u_v_left, W1, W2, P_n = build_emb_graph(neighbors_left, attributes_left, u_init_left) # N x p
+            scope.reuse_variables()
 
-        scope.reuse_variables()
+            neighbors_right = tf.placeholder(tf.int32, shape=(None, MAX_NEIGHBORS_NUM)) # N x MAX_NEIGHBORS_NUM
+            attributes_right = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
+            u_init_right = tf.placeholder(tf.float32, shape=(None, emb_size)) # N x p
+            graph_emb_right = build_emb_graph(neighbors_right, attributes_right, u_init_right) # N x p
 
-        neighbors_right = tf.placeholder(tf.int32, shape=(None, MAX_NEIGHBORS_NUM)) # N x MAX_NEIGHBORS_NUM
-        attributes_right = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
-        u_init_right = tf.placeholder(tf.float32, shape=(None, emb_size)) # N x p
-        graph_emb_right, u_v_right, W1_, W2_, P_n_ = build_emb_graph(neighbors_right, attributes_right, u_init_right) # N x p
+            label = tf.placeholder(tf.float32)
 
-        label = tf.placeholder(tf.float32)
+            norm_emb_left = tf.nn.l2_normalize(graph_emb_left, 1)
+            norm_emb_right = tf.nn.l2_normalize(graph_emb_right, 1)
+            cos_similarity = tf.reduce_sum(tf.multiply(norm_emb_left, norm_emb_right))
+            loss_op = tf.square(cos_similarity - label)
 
-    norm_emb_left = tf.nn.l2_normalize(graph_emb_left, 1)
-    norm_emb_right = tf.nn.l2_normalize(graph_emb_right, 1)
-    cos_similarity = tf.reduce_sum(tf.multiply(norm_emb_left, norm_emb_right))
-    loss_op = tf.square(cos_similarity - label)
-    train_op = tf.train.AdamOptimizer(0.0001).minimize(loss_op)
+        train_op = tf.train.AdamOptimizer(0.0001).minimize(loss_op)
+    else: 
+        with tf.variable_scope("siamese") as scope:
+            # Bulid Inference Graph
+            neighbors_test = tf.placeholder(tf.int32, shape=(None, MAX_NEIGHBORS_NUM)) # N x MAX_NEIGHBORS_NUM
+            attributes_test = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
+            u_init_test = tf.placeholder(tf.float32, shape=(None, emb_size)) # N x p
+            graph_emb = build_emb_graph(neighbors_test, attributes_test, u_init_test) # N x p
+
+    saver = tf.train.Saver()
     init_op = tf.global_variables_initializer()
-
 
     with tf.Session() as sess:
         sess.run(init_op)
         
-        num_epoch = 50
-        epoch_loss = -1
-        for cur_epoch in range(num_epoch):
-            loss_sum = 0
-            cur_step = 0
-            correct = 0
-            samples, labels = learning_data['test']['sample'], learning_data['test']['label']
-            if cur_epoch != 0:
+        if load_model == 1:
+            states = tf.train.get_checkpoint_state(saver_path)
+            saver.restore(sess, states.model_checkpoint_path)
+        if start_ipython == 1:
+            _start_shell(locals(), globals())
+        else:
+            num_epoch = 50
+            epoch_loss = -1
+            total_step = 0
+            for cur_epoch in range(num_epoch):
+                loss_sum = 0
+                cur_step = 0
+                correct = 0
+                samples, labels = learning_data['test']['sample'], learning_data['test']['label']
+                if cur_epoch != 0:
+                    for sample, ground_truth in zip(samples, labels):
+                        neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0])
+                        neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1])
+                        sim = sess.run(cos_similarity, {
+                            neighbors_left: neighbors_l, attributes_left: attributes_l, u_init_left: u_init_l,
+                            neighbors_right: neighbors_r, attributes_right: attributes_r, u_init_right: u_init_r,
+                        })
+                        if sim > 0 and ground_truth == 1:
+                            correct += 1
+                        elif sim < 0 and ground_truth == -1:
+                            correct += 1
+
+                samples, labels = learning_data['train']['sample'], learning_data['train']['label']
                 for sample, ground_truth in zip(samples, labels):
+                    # Build neighbors, attributes, and u_init
                     neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0])
                     neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1])
-                    sim = sess.run(cos_similarity, {
+
+                    _, loss = sess.run([train_op, loss_op], {
                         neighbors_left: neighbors_l, attributes_left: attributes_l, u_init_left: u_init_l,
                         neighbors_right: neighbors_r, attributes_right: attributes_r, u_init_right: u_init_r,
+                        label: ground_truth
                     })
-                    if sim > 0 and ground_truth == 1:
-                        correct += 1
-                    elif sim < 0 and ground_truth == -1:
-                        correct += 1
+                    sys.stdout.write('Epoch: {:10}, Loss: {:15.10f}, Step: {:10}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, correct/len(learning_data['test']['sample'])))
+                    sys.stdout.flush()
+                    cur_step += 1 
+                    total_step += 1
+                    loss_sum += loss
+                epoch_loss = (loss_sum / len(samples))
+                cur_epoch += 1
 
-            samples, labels = learning_data['train']['sample'], learning_data['train']['label']
-            for sample, ground_truth in zip(samples, labels):
-                # Build neighbors, attributes, and u_init
-                neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0])
-                neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1])
-
-                _, loss = sess.run([train_op, loss_op], {
-                    neighbors_left: neighbors_l, attributes_left: attributes_l, u_init_left: u_init_l,
-                    neighbors_right: neighbors_r, attributes_right: attributes_r, u_init_right: u_init_r,
-                    label: ground_truth
-                })
-                sys.stdout.write('Epoch: {:10}, Loss: {:15.10f}, Step: {:10}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, correct/len(learning_data['test']['sample'])))
-                sys.stdout.flush()
-                cur_step += 1 
-                loss_sum += loss
-            epoch_loss = (loss_sum / len(samples))
-            cur_epoch += 1
-
+                saver.save(sess, os.path.join(saver_path, 'model.ckpt'), global_step=total_step)
 
 
 if __name__ == '__main__':
