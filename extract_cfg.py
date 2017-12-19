@@ -37,7 +37,7 @@ def extract_cfg(file_path):
         items = f.split()
         func_name = items[-1]
         func_addr = items[0]
-        if not re.search("(sym\._)|(sym\.imp)|(sym\.mingw)|(sym\..*cxx::)|(sym\..*std::)|(sym\.register_tm_clones)|(sym\.deregister_tm_clones)", func_name) and re.search("sym\.", func_name):
+        if not re.search("(sym\._)|(sym\.imp)|(sym\.mingw)|(sym\..*cxx::)|(sym\..*std::)|(sym\.register_tm_clones)|(sym\.deregister_tm_clones)|(call_weak_fn)|(operator)", func_name) and re.search("sym\.", func_name):
             funcs[func_name] = func_addr
 
     for func_name in funcs:
