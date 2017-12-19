@@ -5,7 +5,6 @@ import sys
 import r2pipe
 import time
 import re
-import pypeg2
 import subprocess
 from config import *
 

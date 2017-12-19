@@ -53,7 +53,7 @@ def create_acfg_from_file(filename, arch):
 def main(argv):
     if len(argv) != 3:
 #         print('Usage:\n\tcreate_acfg.py dot_file_path arch output_file_path')
-        print('Usage:\n\tcreate_acfg.py <src folder> <output dictionary>')
+        print('Usage:\n\tcreate_acfg.py <src folder> <output pickle>')
         sys.exit(-1)
 
     src_folder = argv[1]
