@@ -42,15 +42,13 @@ def main(argv):
 
     files = os.listdir(src_folder)
     for file_name in files:
-        sub_folder = os.path.join(src_folder, file_name)
-        src_file_path = os.path.join(sub_folder, file_name) + '.cpp'
-        for arch in archs:
-            binary_file_path = src_file_path + '.' + arch
-            if os.path.isfile(binary_file_path):
-                print('>>> Processing {} ...'.format(binary_file_path))
-                extract_cfg(binary_file_path)
+        exe_file = os.path.join(src_folder, file_name)
+        if os.path.isfile(exe_file):
+            print('>>> Processing {} ...'.format(exe_file))
+            extract_cfg(exe_file)
     return
 
 
 if __name__ == '__main__':
     main(sys.argv)
+#     extract_cfg(sys.argv[1])

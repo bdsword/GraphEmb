@@ -64,6 +64,7 @@ def shuffle_data(dataset):
 
 
 def get_graph_info_mat(graph):
+    graph = graph['graph']
     neighbors = []
     attributes = []
 

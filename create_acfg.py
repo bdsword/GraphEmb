@@ -8,6 +8,7 @@ import numpy as np
 from utils import _start_shell
 import re
 import os
+import glob
 
 
 def get_attributes(code, arch):
@@ -62,26 +63,23 @@ def main(argv):
         sys.exit(-1)
 
     arch_func_graph = dict()
-    files = os.listdir(src_folder)
-    for file_name in files:
-        sub_folder = os.path.join(src_folder, file_name)
-        src_file_path = os.path.join(sub_folder, file_name) + '.cpp'
-        dot_files = [f for f in os.listdir(sub_folder) if f.endswith('.dot')]
-        for dot_file in dot_files:
-            pattern = r'{}\.(.+)~(.+)\.dot'.format(file_name + '.cpp')
-            items = re.findall(pattern, dot_file)[0]
-            arch = items[0]
-            function_name = items[1]
-            try:
-                graph = create_acfg_from_file(os.path.join(sub_folder, dot_file), arch)
-            except:
-                os.remove(os.path.join(sub_folder, dot_file))
-                continue
-            if arch not in arch_func_graph:
-                arch_func_graph[arch] = dict()
-            if function_name not in arch_func_graph[arch]:
-                arch_func_graph[arch][function_name] = dict()
-            arch_func_graph[arch][function_name][file_name] = graph
+    for file_path in glob.iglob(os.path.join(src_folder, '**', '*.dot'), recursive=True):
+        file_name = os.path.basename(file_path)
+        pattern = r'(.+)~(.+)\.dot'
+        items = re.findall(pattern, file_name)[0]
+        arch = 'x86'
+        bin_name = items[0]
+        function_name = items[1]
+        try:
+            graph = create_acfg_from_file(file_path, arch)
+        except:
+            os.remove(file_path)
+            continue
+        if arch not in arch_func_graph:
+            arch_func_graph[arch] = dict()
+        if function_name not in arch_func_graph[arch]:
+            arch_func_graph[arch][function_name] = dict()
+        arch_func_graph[arch][function_name][bin_name] = graph
 
     with open(sys.argv[2], 'wb') as f:
         pickle.dump(arch_func_graph, f)

@@ -62,7 +62,7 @@ def main(argv):
         pair_pattern_1 = '{}~{}'.format(data_pattern_left, data_pattern_right)
         pair_pattern_2 = '{}~{}'.format(data_pattern_right, data_pattern_left)
         if pair_pattern_1 not in used_data and pair_pattern_2 not in used_data:
-            learning_data['train']['sample'].append([graph_left, graph_right])
+            learning_data['train']['sample'].append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}])
             learning_data['train']['label'].append(1)
             counter += 1
             used_data.add(pair_pattern_1)
@@ -107,7 +107,7 @@ def main(argv):
         pair_pattern_1 = '{}~{}'.format(data_pattern_left, data_pattern_right)
         pair_pattern_2 = '{}~{}'.format(data_pattern_right, data_pattern_left)
         if pair_pattern_1 not in used_data and pair_pattern_2 not in used_data:
-            learning_data['train']['sample'].append([graph_left, graph_right])
+            learning_data['train']['sample'].append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}])
             learning_data['train']['label'].append(-1)
             counter += 1
             used_data.add(pair_pattern_1)
@@ -158,7 +158,7 @@ def main(argv):
         pair_pattern_1 = '{}~{}'.format(data_pattern_left, data_pattern_right)
         pair_pattern_2 = '{}~{}'.format(data_pattern_right, data_pattern_left)
         if pair_pattern_1 not in used_data and pair_pattern_2 not in used_data:
-            learning_data['test']['sample'].append([graph_left, graph_right])
+            learning_data['test']['sample'].append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}])
             learning_data['test']['label'].append(label)
             counter += 1
             used_data.add(pair_pattern_1)
