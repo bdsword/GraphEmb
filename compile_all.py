@@ -18,18 +18,20 @@ def main(argv):
 
     files = os.listdir(src_folder)
     for file_name in files:
-        sub_folder = os.path.join(src_folder, file_name)
-        file_path = os.path.join(sub_folder, file_name + '.cpp')
+        author_dir = os.path.join(src_folder, file_name)
 
-        for arch in archs:
-            output_file = '{}.{}'.format(file_path, arch)
-            # Only compile when the binary does not exist
-            if not os.path.isfile(output_file):
-                compile_cmd = compile_cmds[arch].format(output=output_file, src=file_path)
-                ret = subprocess.call(compile_cmd, shell=True)
-                if ret != 0:
-                    print('!!!!! Failed to exec: {}\n Return code: {}\n'.format(compile_cmd, ret))
-                    continue
+        for code_name in os.listdir(author_dir):
+            code_path = os.path.join(author_dir, code_name)
+
+            for arch in archs:
+                output_file = '{}.{}.exe'.format(code_path, arch)
+                # Only compile when the binary does not exist
+                if not os.path.isfile(output_file):
+                    compile_cmd = compile_cmds[arch].format(output=output_file, src=code_path)
+                    ret = subprocess.call(compile_cmd, shell=True)
+                    if ret != 0:
+                        print('!!!!! Failed to exec: {}\n Return code: {}\n'.format(compile_cmd, ret))
+                        continue
     
 
 if __name__ == '__main__':
