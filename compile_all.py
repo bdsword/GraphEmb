@@ -16,15 +16,21 @@ def main(argv):
         print('The target path is not a folder.')
         sys.exit(-1)
 
+    valid_exts = ['.c', '.cc', '.cpp']
     files = os.listdir(src_folder)
     for file_name in files:
         author_dir = os.path.join(src_folder, file_name)
 
         for code_name in os.listdir(author_dir):
+            code_basename = os.path.splitext(code_name)[0]
+            code_ext = os.path.splitext(code_name)[1]
+            if code_ext not in valid_exts:
+                continue
             code_path = os.path.join(author_dir, code_name)
 
             for arch in archs:
-                output_file = '{}.{}.exe'.format(code_path, arch)
+                output_path = os.path.join(author_dir, code_basename)
+                output_file = '{}.{}.exe'.format(output_path, arch)
                 # Only compile when the binary does not exist
                 if not os.path.isfile(output_file):
                     compile_cmd = compile_cmds[arch].format(output=output_file, src=code_path)
