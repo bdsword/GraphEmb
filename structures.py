@@ -6,13 +6,16 @@ class Node:
         self.attributes = attributes
 
 
-class Edge:
-    def __init__(self, src, dst):
-        self.src = src
-        self.dst = dst
+class DirAwareNode:
+    def __init__(self, node_id, code, incomes, outcomes, attributes):
+        self.node_id = node_id
+        self.code = code
+        self.incomes = incomes
+        self.outcomes = outcomes
+        self.neighbors = list(incomes) + list(outcomes)
+        self.attributes = attributes
 
 
 class Graph:
-    def __init__(self, nodes, edges):
+    def __init__(self, nodes):
         self.nodes = nodes
-        self.edges = edges

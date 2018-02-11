@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import pydotplus
 import sys
-from structures import Graph, Node, Edge
+from structures import Graph, Node
 from attributes import attributes_funcs
 import pickle
 import numpy as np
