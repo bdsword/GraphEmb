@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import networkx as nx
 import tensorflow as tf
 import os
 import sys
@@ -8,6 +9,7 @@ from utils import _start_shell
 from structures import Graph, Node
 from random import shuffle
 import pickle
+import argparse
 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
@@ -16,7 +18,7 @@ T = 5
 MAX_NEIGHBORS_NUM = 50
 relu_layer_num = 2
 emb_size = 64
-attributes_dim = 4 # d
+attributes_dim = 5 # d
 
 def simga_function(input_l_v, P_n):
     # N: number of nodes
@@ -70,31 +72,43 @@ def get_graph_info_mat(graph):
 
     neighbors.append(np.zeros(MAX_NEIGHBORS_NUM))
     attributes.append(np.zeros(attributes_dim))
-    for node in graph.nodes:
-        if MAX_NEIGHBORS_NUM < len(node.neighbors):
-            raise ValueError('Number of neightbors is larger than MAX_NEIGHBORS_NUM: {} > MAX_NEIGHBORS_NUM'.format(len(node.neighbors)))
-        ns = np.pad(list(node.neighbors), (0, MAX_NEIGHBORS_NUM - len(node.neighbors)), 'constant', constant_values=0)
+    undir_graph = graph.to_undirected()
+    undir_graph = nx.relabel.convert_node_labels_to_integers(undir_graph, first_label=1)
+    for node_id in undir_graph.nodes:
+        neighbor_ids = list(undir_graph.neighbors(node_id)) 
+        if MAX_NEIGHBORS_NUM <= len(neighbor_ids):
+            raise ValueError('Number of neightbors of node "{}" is larger than MAX_NEIGHBORS_NUM: {} >= MAX_NEIGHBORS_NUM'.format(undir_graph.nodes[node_id], len(neighbor_ids)))
+        ns = np.pad(neighbor_ids, (0, MAX_NEIGHBORS_NUM - len(neighbor_ids)), 'constant', constant_values=0)
         neighbors.append(ns)
-        attributes.append(node.attributes)
+        attribute = [undir_graph.nodes[node_id]['num_calls'],
+                     undir_graph.nodes[node_id]['num_transfer'],
+                     undir_graph.nodes[node_id]['num_arithmetic'],
+                     undir_graph.nodes[node_id]['num_instructions'],
+                     undir_graph.nodes[node_id]['betweenness_centrality']]
+        attributes.append(attribute)
 
     return neighbors, attributes, np.zeros((len(graph.nodes), emb_size))
 
 def main(argv):
-    if len(argv) != 5:
-        print('Usage:\n\tgraph_emb.py <train pickle data> <saver folder> <load model> <start ipython>')
-        sys.exit(-1)
+    parser = argparse.ArgumentParser(description='Train the graph embedding network for function flow graph.')
+    parser.add_argument('TrainingDataPlk', help='The pickle format training data.')
+    parser.add_argument('SaverDir', help='The folder to save the model.')
+    parser.add_argument('--LoadModel', dest='LoadModel', help='Load old model in SaverDir.', action='store_true')
+    parser.add_argument('--no-LoadModel', dest='LoadModel', help='Do not load old model in SaverDir.', action='store_false')
+    parser.set_defaults(LoadModel=False)
+    parser.add_argument('--StartIPython', dest='StartIPython', help='Start IPython shell.', action='store_true')
+    parser.add_argument('--no-StartIPython', dest='StartIPython', help='Do not start IPython shell.', action='store_false')
+    parser.set_defaults(StartIPython=False)
+    args = parser.parse_args()
 
-    if not os.path.isdir(argv[2]):
+    if not os.path.isdir(args.SaverDir):
         print('Saver folder should be a valid folder.')
         sys.exit(-2)
-    saver_path = argv[2]
-    load_model = int(argv[3])
-    start_ipython = int(argv[4])
 
-    with open(argv[1], 'rb') as f:
+    with open(args.TrainingDataPlk, 'rb') as f:
         learning_data = pickle.load(f)
 
-    if start_ipython == 0:
+    if not args.StartIPython:
         with tf.variable_scope("siamese") as scope:
             # Build Training Graph
             neighbors_left = tf.placeholder(tf.int32, shape=(None, MAX_NEIGHBORS_NUM)) # N x MAX_NEIGHBORS_NUM
@@ -131,10 +145,10 @@ def main(argv):
     with tf.Session() as sess:
         sess.run(init_op)
         
-        if load_model == 1:
-            states = tf.train.get_checkpoint_state(saver_path)
+        if args.LoadModel:
+            states = tf.train.get_checkpoint_state(args.SaverDir)
             saver.restore(sess, states.model_checkpoint_path)
-        if start_ipython == 1:
+        if args.StartIPython:
             _start_shell(locals(), globals())
         else:
             num_epoch = 50
@@ -158,6 +172,7 @@ def main(argv):
                         elif sim < 0 and ground_truth == -1:
                             correct += 1
 
+                # samples, labels = shuffle_data(learning_data['train'])
                 samples, labels = learning_data['train']['sample'], learning_data['train']['label']
                 for sample, ground_truth in zip(samples, labels):
                     # Build neighbors, attributes, and u_init
@@ -174,10 +189,11 @@ def main(argv):
                     cur_step += 1 
                     total_step += 1
                     loss_sum += loss
+                print()
                 epoch_loss = (loss_sum / len(samples))
                 cur_epoch += 1
 
-                saver.save(sess, os.path.join(saver_path, 'model.ckpt'), global_step=total_step)
+                saver.save(sess, os.path.join(args.SaverDir, 'model.ckpt'), global_step=total_step)
 
 
 if __name__ == '__main__':
