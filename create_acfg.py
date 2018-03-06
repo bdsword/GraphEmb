@@ -2,7 +2,8 @@
 import networkx as nx
 import argparse
 import sys
-from attributes import attributes_funcs
+from statistical_features import statistical_features
+from structural_features import structural_features
 import pickle
 import numpy as np
 from utils import _start_shell
@@ -11,31 +12,33 @@ import os
 import sqlite3
 
 
-def get_block_attributes(graph, arch):
-    attrs = dict()
-    for func in attributes_funcs:
-        attrs[func.__name__] = dict()
+def get_statistical_features(graph, arch):
+    features = dict()
+    for feature_func in statistical_features:
+        features[feature_func.__name__] = dict()
         for node in graph.nodes:
             code = graph.nodes[node]['label']
-            attrs[func.__name__][node] = float(func(code, arch))
-    return attrs
+            features[feature_func.__name__][node] = float(feature_func(code, arch))
+    return features
 
 
-def get_graph_attributes(graph):
-    betweenness_centrality = nx.algorithms.centrality.betweenness_centrality(graph)
-    return {'betweenness_centrality': betweenness_centrality}
+def get_structural_features(graph):
+    features = dict()
+    for feature_func in structural_features:
+        features[feature_func.__name__] = feature_func(graph)
+    return features 
 
 
 def create_acfg_from_file(file_path, arch):
     graph = nx.drawing.nx_pydot.read_dot(file_path)
 
-    block_attrs = get_block_attributes(graph, arch)
-    for attr_name in block_attrs:
-        nx.set_node_attributes(graph, block_attrs[attr_name], attr_name)
+    features_dict = get_statistical_features(graph, arch)
+    for feature_name in features_dict:
+        nx.set_node_attributes(graph, features_dict[feature_name], feature_name)
 
-    graph_attrs = get_graph_attributes(graph)
-    for attr_name in graph_attrs:
-        nx.set_node_attributes(graph, graph_attrs[attr_name], attr_name)
+    feature_dict = get_structural_features(graph)
+    for feature_name in feature_dict:
+        nx.set_node_attributes(graph, feature_dict[feature_name], feature_name)
 
     return graph
 

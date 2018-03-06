@@ -24,7 +24,7 @@ def num_calls(code, arch):
     for ins in instructions:
         if len(re.findall(arch_ins_pattern[arch], ins)) != 0:
             counter += 1
-    return counter
+    return counter * 66.22
 
 
 def num_instructions(code, arch):
@@ -32,7 +32,7 @@ def num_instructions(code, arch):
     code = code.replace('\\l', '\n')
     code = re.sub(r'^;.*$', r'', code)
     instructions = re.findall(r'(.*)(?<!:)\n', code)
-    return len(instructions)
+    return len(instructions) * 41.37
 
 
 def num_transfer(code, arch):
@@ -44,7 +44,7 @@ def num_transfer(code, arch):
     for ins in instructions:
         if len(re.findall(arch_ins_pattern[arch], ins)) != 0:
             counter += 1
-    return counter
+    return counter * 6.54
 
 
 def num_arithmetic(code, arch):
@@ -56,7 +56,7 @@ def num_arithmetic(code, arch):
     for ins in instructions:
         if len(re.findall(arch_ins_pattern[arch], ins)) != 0:
             counter += 1
-    return counter
+    return counter * 55.65
 
-attributes_funcs = [num_calls, num_transfer, num_arithmetic, num_instructions]
+statistical_features = [num_calls, num_transfer, num_arithmetic, num_instructions]
 
