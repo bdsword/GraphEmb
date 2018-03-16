@@ -10,6 +10,8 @@ from utils import _start_shell
 import re
 import os
 import sqlite3
+import time
+import progressbar
 
 
 def get_statistical_features(graph, arch):
@@ -65,6 +67,8 @@ def main(argv):
     cur.execute('CREATE INDEX contest ON {}(contest);'.format(TABLE_NAME))
     conn.commit()
 
+    bar = progressbar.ProgressBar(max_value=progressbar.UnknownLength)
+    counter = 0
     # Parse each file name pattern to extract arch, binary name(problem id)
     for binary_path in files:
         author_name = os.path.basename(os.path.abspath(os.path.join(binary_path, os.pardir)))
@@ -85,16 +89,20 @@ def main(argv):
             ext = f_path_parts[1]
             if ext == '.dot':
                 function_name = os.path.basename(path_without_ext)
-                acfg = create_acfg_from_file(fpath, arch)
-                # except Exception as e:
-                #     print('!!! Failed to process {}. !!!'.format(fpath))
-                #     continue
+                try:
+                    acfg = create_acfg_from_file(fpath, arch)
+                except:
+                    print('!!! Failed to process {}. !!!'.format(fpath))
+                    continue
                 acfg_path = path_without_ext + '.acfg.plk'
                 with open(acfg_path, 'wb') as f:
                     pickle.dump(acfg, f)
                 cur.execute('INSERT INTO {} (binary_path, question, acfg_path, arch, function_name, author, contest) VALUES ("{}", "{}", "{}", "{}", "{}", "{}", "{}");'
                             .format(TABLE_NAME, binary_path, bin_name, acfg_path, arch, function_name, author_name, contest_name))
                 conn.commit()
+                counter += 1
+                bar.update(counter)
+
     conn.close()
 
 
