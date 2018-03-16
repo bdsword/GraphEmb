@@ -5,4 +5,5 @@ datasets/
 *.txt
 *.sqlite3
 *.swp
+*.csv
 
