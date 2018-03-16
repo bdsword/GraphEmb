@@ -1,172 +1,122 @@
 #!/usr/bin/env python3
-
+import itertools
+import pickle
+import sqlite3
+import argparse
 import os
 import sys
-import numpy as np
-import pickle
-import re
-from random import randrange
-from utils import _start_shell
+import random
+
+def load_graph(graph_path):
+    graph = None
+    with open(graph_path, 'rb') as f:
+        graph = pickle.load(f)
+    return graph
 
 
 def main(argv):
-    if len(argv) != 3:
-        print('Usage:\n\tcreate_learning_data.py <acfg dictionary plk> <output learning plk>')
-        sys.exit(-1)
+    parser = argparse.ArgumentParser(description='Slice the whole dataset according to the sqlite fileinto train and test data.')
+    parser.add_argument('SQLiteDB', help='Path to the sqlite db file contains information about ACFGs.')
+    parser.add_argument('OutputPlk', help='Path to the output pickle file.')
+    parser.add_argument('--Seed', type=int, default=0, help='Seed to the random number generator.')
+    args = parser.parse_args()
 
-    with open(argv[1], 'rb') as f: 
-        acfg_dict = pickle.load(f)
+    TABLE_NAME = 'flow_graph_acfg'
 
-    num_positive = 2000 
-    num_negative = 2000 
-    num_test = 2000
+    conn = sqlite3.connect(args.SQLiteDB)
+    cur = conn.cursor()
 
-    learning_data = {'train': {'sample': [], 'label': []}, 'test': {'sample': [], 'label': []}}
-    used_data = set()
+    cur.execute('SELECT DISTINCT contest FROM {}'.format(TABLE_NAME))
+    available_contests = [c[0] for c in cur.fetchall()]
 
-    counter = 0
-    # Select sample from different arch
-    while(counter < num_positive):
+    num_positive = int(input('How many positive pair would you like to generate: '))
+    num_negative = int(input('How many negative pair would you like to generate: '))
+    num_percent = int(input('How much percent of sample would you like to be the test dataset: '))
+    test_percent = num_percent / 100.0
 
-        # Select one function from the first arch
+    positive_pool = []
 
-        # Arch -> Function Name -> {FileName, Graph}
-        # Random choose one arch
-        available_archs = list(acfg_dict.keys())
-        choosed_arch = available_archs[randrange(0, len(available_archs))]
-        # Random choose one function name
-        available_funcs = list(acfg_dict[choosed_arch].keys())
-        choosed_func = available_funcs[randrange(0, len(available_funcs))]
-        # Random choose one file name
-        available_files = list(acfg_dict[choosed_arch][choosed_func].keys())
-        num_choice = len(available_files)
-        choice_idx = randrange(0, num_choice)
-        choosed_file = available_files[choice_idx]
-        graph_left = acfg_dict[choosed_arch][choosed_func][choosed_file]
+    random.seed(args.Seed)
+    count = 0
+    while count < num_positive:
+        # Random pick contest
+        picked_contest = available_contests[random.randrange(0, len(available_contests))]
 
-        # Random choose another arch 
-        other_archs = available_archs
-        other_archs.remove(choosed_arch)
-        if len(other_archs) < 0:
-            print('Unable to choose another arch...')
-            sys.exit(-2)
+        # Random pick one author
+        cur.execute('SELECT DISTINCT author FROM {} WHERE contest is "{}"'.format(TABLE_NAME, picked_contest))
+        available_authors = [a[0] for a in cur.fetchall()]
+        picked_author = available_authors[random.randrange(0, len(available_authors))]
 
-        another_arch = other_archs[randrange(0, len(other_archs))]
-        try:
-            graph_right = acfg_dict[another_arch][choosed_func][choosed_file]
-        except KeyError as e:
+        # Random pick one question
+        cur.execute('SELECT DISTINCT question FROM {} WHERE contest is "{}" and author is "{}"'.format(TABLE_NAME, picked_contest, picked_author))
+        available_questions = [q[0] for q in cur.fetchall()]
+        picked_question = available_questions[random.randrange(0, len(available_questions))]
+
+        # Random pick two architecture
+        cur.execute('SELECT DISTINCT arch FROM {} WHERE contest is "{}" and author is "{}" and question is "{}"'.format(TABLE_NAME, picked_contest, picked_author, picked_question))
+        available_archs = [a[0] for a in cur.fetchall()]
+        picked_arch_ids = random.sample((0, len(available_archs) - 1), 2)
+        picked_arch_1 = available_archs[picked_arch_ids[0]]
+        picked_arch_2 = available_archs[picked_arch_ids[1]]
+
+        # Random pick one function
+        cur.execute('SELECT DISTINCT function_name FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}"'.format(TABLE_NAME, picked_contest, picked_author, picked_question, picked_arch_1))
+        available_funcs_left = [f[0] for f in cur.fetchall()]
+        cur.execute('SELECT DISTINCT function_name FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}"'.format(TABLE_NAME, picked_contest, picked_author, picked_question, picked_arch_2))
+        available_funcs_right = [f[0] for f in cur.fetchall()]
+        both_contain_fucs = list(set(available_funcs_left) & set(available_funcs_right))
+        picked_func = both_contain_fucs[random.randrange(0, len(both_contain_fucs))]
+
+        # Select the first record
+        cur.execute('SELECT * FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}" and function_name is "{}"'.format(TABLE_NAME, picked_contest, picked_author, picked_question, picked_arch_1, picked_func))
+        row = cur.fetchone()
+        graph_left = load_graph(row[1])
+        data_pattern_left = '{}:{}:{}:{}:{}'.format(picked_contest, picked_author, picked_question, picked_arch_1, picked_func)
+
+        # Select the second record
+        cur.execute('SELECT * FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}" and function_name is "{}"'.format(TABLE_NAME, picked_contest, picked_author, picked_question, picked_arch_2, picked_func))
+        row = cur.fetchone()
+        graph_right = load_graph(row[1])
+        data_pattern_right = '{}:{}:{}:{}:{}'.format(picked_contest, picked_author, picked_question, picked_arch_2, picked_func)
+
+        # Append data pair to positive_pool
+        positive_pool.append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}]) 
+        count += 1
+
+    negative_pool = []
+    cur.execute('SELECT * FROM {}'.format(TABLE_NAME))
+    all_rows = cur.fetchall()
+    count = 0
+    while count < num_negative:
+        picked_row_ids = random.sample((0, len(all_rows) - 1), 2)
+        row_pair = [all_rows[picked_row_ids[0]], all_rows[picked_row_ids[1]]]
+        if row_pair[0][3] == row_pair[1][3]:
             continue
-        
-        data_pattern_left = '{}_{}_{}'.format(choosed_arch, choosed_func, choosed_file)
-        data_pattern_right = '{}_{}_{}'.format(another_arch, choosed_func, choosed_file)
-        pair_pattern_1 = '{}~{}'.format(data_pattern_left, data_pattern_right)
-        pair_pattern_2 = '{}~{}'.format(data_pattern_right, data_pattern_left)
-        if pair_pattern_1 not in used_data and pair_pattern_2 not in used_data:
-            learning_data['train']['sample'].append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}])
-            learning_data['train']['label'].append(1)
-            counter += 1
-            used_data.add(pair_pattern_1)
-            used_data.add(pair_pattern_2)
+        graph_left = load_graph(row_pair[0][1])
+        graph_right = load_graph(row_pair[1][1])
+        data_pattern_left = '{}:{}:{}:{}:{}'.format(row_pair[0][6], row_pair[0][5], row_pair[0][4], row_pair[0][2], row_pair[0][5])
+        data_pattern_right = '{}:{}:{}:{}:{}'.format(row_pair[1][6], row_pair[1][5], row_pair[1][4], row_pair[1][2], row_pair[1][5])
+        negative_pool.append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}]) 
+        count += 1
 
+    num_train_positive = int(len(positive_pool) * (1.0 - test_percent))
+    num_train_negative = int(len(negative_pool) * (1.0 - test_percent))
+    train_p_sample = positive_pool[:num_train_positive]
+    train_p_label = [1] * num_train_positive 
+    train_n_sample = negative_pool[:num_train_negative]
+    train_n_label = [-1] * num_train_negative 
 
-    used_data = set()
-    counter = 0
-    while counter < num_negative:
-        # Arch -> Function Name -> {FileName, Graph}
-        # Random choose one arch
-        available_archs = list(acfg_dict.keys())
-        choosed_arch = available_archs[randrange(0, len(available_archs))]
-        # Random choose one function name
-        available_funcs = list(acfg_dict[choosed_arch].keys())
-        choosed_func = available_funcs[randrange(0, len(available_funcs))]
-        # Random choose one file name
-        available_files = list(acfg_dict[choosed_arch][choosed_func].keys())
-        num_choice = len(available_files)
-        choice_idx = randrange(0, num_choice)
-        choosed_file = available_files[choice_idx]
-        graph_left = acfg_dict[choosed_arch][choosed_func][choosed_file]
+    test_p_sample = positive_pool[num_train_positive:]
+    test_p_label = [1] * len(test_p_sample)
+    test_n_sample = negative_pool[num_train_negative:]
+    test_n_label = [-1] * len(test_n_sample)
 
-
-        # Random choose one arch
-        another_arch = available_archs[randrange(0, len(available_archs))]
-        # Random choose one function name
-        available_funcs = list(acfg_dict[choosed_arch].keys())
-        another_func = available_funcs[randrange(0, len(available_funcs))]
-        # Random choose one file name
-        available_files = list(acfg_dict[choosed_arch][choosed_func].keys())
-        num_choice = len(available_files)
-        choice_idx = randrange(0, num_choice)
-        another_file = available_files[choice_idx]
-        graph_left = acfg_dict[choosed_arch][choosed_func][choosed_file]
-
-        if choosed_file == another_file and choosed_func == another_func:
-            continue
-
-        data_pattern_left = '{}_{}_{}'.format(choosed_arch, choosed_func, choosed_file)
-        data_pattern_right = '{}_{}_{}'.format(another_arch, another_func, another_file)
-        pair_pattern_1 = '{}~{}'.format(data_pattern_left, data_pattern_right)
-        pair_pattern_2 = '{}~{}'.format(data_pattern_right, data_pattern_left)
-        if pair_pattern_1 not in used_data and pair_pattern_2 not in used_data:
-            learning_data['train']['sample'].append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}])
-            learning_data['train']['label'].append(-1)
-            counter += 1
-            used_data.add(pair_pattern_1)
-            used_data.add(pair_pattern_2)
-    
-    
-    used_data = set()
-    counter = 0
-    # Select sample from different arch
-    while(counter < num_test):
-        # Arch -> Function Name -> {FileName, Graph}
-        # Random choose one arch
-        available_archs = list(acfg_dict.keys())
-        choosed_arch = available_archs[randrange(0, len(available_archs))]
-        # Random choose one function name
-        available_funcs = list(acfg_dict[choosed_arch].keys())
-        choosed_func = available_funcs[randrange(0, len(available_funcs))]
-        # Random choose one file name
-        available_files = list(acfg_dict[choosed_arch][choosed_func].keys())
-        num_choice = len(available_files)
-        choice_idx = randrange(0, num_choice)
-        choosed_file = available_files[choice_idx]
-        graph_left = acfg_dict[choosed_arch][choosed_func][choosed_file]
-
-
-        # Random choose one arch
-        another_arch = available_archs[randrange(0, len(available_archs))]
-        # Random choose one function name
-        available_funcs = list(acfg_dict[choosed_arch].keys())
-        another_func = available_funcs[randrange(0, len(available_funcs))]
-        # Random choose one file name
-        available_files = list(acfg_dict[choosed_arch][choosed_func].keys())
-        num_choice = len(available_files)
-        choice_idx = randrange(0, num_choice)
-        another_file = available_files[choice_idx]
-        graph_left = acfg_dict[choosed_arch][choosed_func][choosed_file]
-
-        if choosed_file == another_file and choosed_func == another_func:
-            if choosed_arch == another_arch:
-                continue
-            else:
-                label = 1
-        else:
-            label = -1
-
-        data_pattern_left = '{}_{}_{}'.format(choosed_arch, choosed_func, choosed_file)
-        data_pattern_right = '{}_{}_{}'.format(another_arch, another_func, another_file)
-        pair_pattern_1 = '{}~{}'.format(data_pattern_left, data_pattern_right)
-        pair_pattern_2 = '{}~{}'.format(data_pattern_right, data_pattern_left)
-        if pair_pattern_1 not in used_data and pair_pattern_2 not in used_data:
-            learning_data['test']['sample'].append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}])
-            learning_data['test']['label'].append(label)
-            counter += 1
-            used_data.add(pair_pattern_1)
-            used_data.add(pair_pattern_2)
-
-    with open(sys.argv[2], 'wb') as f:
+    learning_data = {'train': {'sample': train_p_sample + train_n_sample, 'label': train_p_label + train_n_label},
+                     'test': {'sample': test_p_sample + test_n_sample, 'label': test_p_label + test_n_label}}
+    with open(args.OutputPlk, 'wb') as f:
         pickle.dump(learning_data, f)
 
+    conn.close()
 
 if __name__ == '__main__':
     main(sys.argv)
