@@ -125,7 +125,7 @@ def main(argv):
     num_process = 5
     for i in range(num_process):
         p.apply_async(create_acfg_process, args=(q, lock, args.SQLiteFile, counter,))
-    p.apply_async(progressbar_process, args(q, lock, counter,))
+    p.apply_async(progressbar_process, args=(q, lock, counter,))
 
     # Parse each file name pattern to extract arch, binary name(problem id)
     for binary_path in files:
