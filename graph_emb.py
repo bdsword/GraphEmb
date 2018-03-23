@@ -6,7 +6,6 @@ import os
 import sys
 import numpy as np
 from utils import _start_shell
-from structures import Graph, Node
 from random import shuffle
 import pickle
 import argparse
