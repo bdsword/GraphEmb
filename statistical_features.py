@@ -58,5 +58,30 @@ def num_arithmetic(code, arch):
             counter += 1
     return counter * 55.65
 
-statistical_features = [num_calls, num_transfer, num_arithmetic, num_instructions]
+
+def num_string(code, arch):
+    arch = check_arch(arch)
+    arch_ins_pattern = {'arm': r'.*;\s*".*"', 'x86': r'.*;\s*".*"'}
+    counter = 0
+    code = code.replace('\\l', '\n')
+    instructions = re.findall(r'(.*)(?<!:)\n', code)
+    for ins in instructions:
+        if len(re.findall(arch_ins_pattern[arch], ins)) != 0:
+            counter += 1
+    return counter * 11.998
+
+
+def num_numeric_constant(code, arch):
+    arch = check_arch(arch)
+    arch_ins_pattern = {'arm': r'[\+\-\*\/\s](\d|\d+h)[\+\-\*\/\s\n]', 'x86': r'[\+\-\*\/\s](\d|\d+h)[\+\-\*\/\s\n]'}
+    counter = 0
+    code = code.replace('\\l', '\n')
+    instructions = re.findall(r'(.*)(?<!:)\n', code)
+    for ins in instructions:
+        if len(re.findall(arch_ins_pattern[arch], ins)) != 0:
+            counter += 1
+    return counter * 15.382
+
+
+statistical_features = [num_calls, num_transfer, num_arithmetic, num_instructions, num_string, num_numeric_constant]
 
