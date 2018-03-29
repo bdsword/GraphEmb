@@ -59,7 +59,7 @@ def main(argv):
         available_archs = list(set(available_archs) - (set(archs) - set(args.Archs)))
         if len(available_archs) < 2:
             continue
-        picked_arch_ids = random.sample(range(0, len(available_archs) - 1), 2)
+        picked_arch_ids = random.sample(range(0, len(available_archs)), 2)
         picked_arch_1 = available_archs[picked_arch_ids[0]]
         picked_arch_2 = available_archs[picked_arch_ids[1]]
 
@@ -102,7 +102,7 @@ def main(argv):
     print('Generate negative samples...')
     bar.max_value = num_negative
     while count < num_negative:
-        picked_row_ids = random.sample(range(0, len(all_rows) - 1), 2)
+        picked_row_ids = random.sample(range(0, len(all_rows)), 2)
         row_pair = [all_rows[picked_row_ids[0]], all_rows[picked_row_ids[1]]]
         if row_pair[0][3] == row_pair[1][3]:
             continue
@@ -120,7 +120,10 @@ def main(argv):
         if '{}_{}'.format(data_pattern_left, data_pattern_right) not in used_pattern and '{}_{}'.format(data_pattern_right, data_pattern_left) not in used_pattern:
             negative_pool.append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}]) 
             count += 1
-            bar.update(count)
+            try:
+                bar.update(count)
+            except:
+                pass
             used_pattern['{}_{}'.format(data_pattern_left, data_pattern_right)] = 1
             used_pattern['{}_{}'.format(data_pattern_right, data_pattern_left)] = 1
 

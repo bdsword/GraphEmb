@@ -72,7 +72,7 @@ def main(argv):
         if len(available_archs) < 2:
             continue
 
-        picked_arch_ids = random.sample(range(0, len(available_archs) - 1), 2)
+        picked_arch_ids = random.sample(range(0, len(available_archs)), 2)
         picked_arch_1 = available_archs[picked_arch_ids[0]]
         picked_arch_2 = available_archs[picked_arch_ids[1]]
 
@@ -127,7 +127,7 @@ def main(argv):
     print('Generate negative samples...')
     bar.max_value = num_negative
     while count < num_negative:
-        picked_row_ids = random.sample(range(0, len(all_rows) - 1), 2)
+        picked_row_ids = random.sample(range(0, len(all_rows)), 2)
         row_pair = [all_rows[picked_row_ids[0]], all_rows[picked_row_ids[1]]]
         if row_pair[0][3] == row_pair[1][3]:
             continue

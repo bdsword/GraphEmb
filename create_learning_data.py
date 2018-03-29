@@ -65,7 +65,7 @@ def main(argv):
         cur.execute('SELECT DISTINCT arch FROM {} WHERE contest is "{}" and author is "{}" and question is "{}"'.format(TABLE_NAME, picked_contest, picked_author, picked_question))
         available_archs = [a[0] for a in cur.fetchall()]
         available_archs = list(set(available_archs) - (set(archs) - set(args.Archs)))
-        picked_arch_ids = random.sample(range(0, len(available_archs) - 1), 2)
+        picked_arch_ids = random.sample(range(0, len(available_archs)), 2)
         picked_arch_1 = available_archs[picked_arch_ids[0]]
         picked_arch_2 = available_archs[picked_arch_ids[1]]
 
@@ -110,7 +110,7 @@ def main(argv):
     print('Generate negative samples...')
     bar.max_value = num_negative
     while count < num_negative:
-        picked_row_ids = random.sample(range(0, len(all_rows) - 1), 2)
+        picked_row_ids = random.sample(range(0, len(all_rows)), 2)
         row_pair = [all_rows[picked_row_ids[0]], all_rows[picked_row_ids[1]]]
         if row_pair[0][3] == row_pair[1][3]:
             continue
