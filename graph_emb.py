@@ -73,7 +73,9 @@ def normalize_data(samples):
             'num_arithmetic': [],
             'num_instructions': [],
             'betweenness_centrality': [],
-            'num_offspring': []}
+            'num_offspring': [],
+            'num_string': [],
+            'num_numeric_constant': []}
      
     for attr_name in attr_names:
         for pair in samples:
@@ -110,7 +112,9 @@ def get_graph_info_mat(graph, attr_avg_std_map, max_neighbors_num, attributes_di
                      (undir_graph.nodes[node_id]['num_arithmetic'] - attr_avg_std_map['num_arithmetic']['avg']) / attr_avg_std_map['num_arithmetic']['std'],
                      (undir_graph.nodes[node_id]['num_instructions'] - attr_avg_std_map['num_instructions']['avg']) / attr_avg_std_map['num_instructions']['std'],
                      (undir_graph.nodes[node_id]['betweenness_centrality'] - attr_avg_std_map['betweenness_centrality']['avg']) / attr_avg_std_map['betweenness_centrality']['std'],
-                     (undir_graph.nodes[node_id]['num_offspring'] - attr_avg_std_map['num_offspring']['avg']) / attr_avg_std_map['num_offspring']['std']
+                     (undir_graph.nodes[node_id]['num_offspring'] - attr_avg_std_map['num_offspring']['avg']) / attr_avg_std_map['num_offspring']['std'],
+                     (undir_graph.nodes[node_id]['num_string'] - attr_avg_std_map['num_string']['avg']) / attr_avg_std_map['num_string']['std'],
+                     (undir_graph.nodes[node_id]['num_numeric_constant'] - attr_avg_std_map['num_numeric_constant']['avg']) / attr_avg_std_map['num_numeric_constant']['std'],
                      ]
         attributes.append(attribute)
     return neighbors, attributes, np.zeros((len(graph.nodes), emb_size))
@@ -282,7 +286,7 @@ def main(argv):
                     sys.stdout.write('Epoch: {:10}, Loss: {:15.10f}, Step: {:10}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, correct/len(learning_data['test']['sample'])))
                     sys.stdout.flush()
 
-                    if loss > 7 or (loss < 0.1 and loss > 0):
+                    if args.Debug and (loss > 7 or (loss < 0.1 and loss > 0)):
                         if loss < 0.1 and loss > 0:
                             num_positive += 1
                         if num_positive <= 5 or loss > 7:
