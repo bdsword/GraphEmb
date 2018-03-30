@@ -18,15 +18,24 @@ def get_number_of_attribute():
     return len(statistical_features) + len(structural_features)
 
 
-def simga_function(input_l_v, P_n, relu_layer_num):
+def sigma_function(input_l_v, P_n, relu_layer_num, batch_size, max_node_num, embedding_size):
     # N: number of nodes
-    output = input_l_v
+    output = input_l_v # [B, N, p]
+    B, N, p = batch_size, max_node_num, embedding_size
     for idx in range(relu_layer_num):
-        output = tf.matmul(P_n[idx], tf.nn.relu(output), transpose_b=True) # [p, p] x [p, N]= [p, N]
-        output = tf.transpose(output) # [N, p]
+        if idx > 0:
+            output = tf.nn.relu(output)
+        output = tf.reshape(output, [B * N, p]) # [B, N, p] -> [B * N, p]
+        output = tf.matmul(P_n[idx], output, transpose_b=True) # [p, p] x [B x N, p]^T = [p, B x N]
+        output = tf.transpose(output) # [B x N, p]
+        output = tf.reshape(output, [B, N, p]) # [B, N, p]
     return output
 
+
 def build_emb_graph(neighbors, attributes, u_init, attributes_dim, emb_size, T, relu_layer_num):
+    # neighbors [B x N x N]
+    # attributes [B x N x d]
+    # u_init [B x N x p]
     with tf.device('/gpu:0'):
         # Static parameters which are shared by each cfg 
         W1 = tf.get_variable("W1", [attributes_dim, emb_size], initializer=tf.random_normal_initializer(stddev=0.1)) # d x p
@@ -38,25 +47,30 @@ def build_emb_graph(neighbors, attributes, u_init, attributes_dim, emb_size, T, 
         # Dynamic parameters for each cfg
         u_v = u_init
 
+        B, N, p = tf.shape(u_v)[0], tf.shape(u_v)[1], tf.shape(u_v)[2]
+        print('B:', B)
+        print('N:', N)
+        print('p:', p)
+        print('neighbors:', neighbors)
+
         for t in range(T):
-            neighbors_u = tf.nn.embedding_lookup(u_v, neighbors)
-            l_vs = tf.reduce_sum(neighbors_u, 1)
-            sigma_output = simga_function(l_vs, P_n, relu_layer_num) # [N, p]
-            w1_x = tf.matmul(W1, attributes, transpose_a=True, transpose_b=True)
-            u_v_transposed = tf.tanh(
-                        tf.add(
-                            tf.matmul(
-                                W1,
-                                attributes, transpose_a=True, transpose_b=True
-                            ) # [p, d] x [d, N] = [p, N]
-                            , tf.transpose(sigma_output) # [p, N]
-                        )
-                    ) # [p, N]
-            u_v = tf.transpose(u_v_transposed) # [N, p]
+            l_vs = tf.matmul(neighbors, u_v) # [B, N, N] x [B, N, p] = [B, N, p]
+            print('l_vs:', l_vs)
+            sigma_output = sigma_function(l_vs, P_n, relu_layer_num, B, N, p) # [B, N, p]
+
+            # Batch-wised: W1 x attributes
+            attributes_reshaped = tf.reshape(attributes, [B * N, attributes_dim])
+            W1_mul_attributes = tf.reshape(tf.matmul(W1, attributes_reshaped, transpose_a=True, transpose_b=True), [B, N, p]) # [B, N, p]
+            
+            sigma_output_add_W1_mul_attributes = tf.add(W1_mul_attributes, sigma_output)            
+
+            u_v = tf.tanh(sigma_output_add_W1_mul_attributes) # [B, N, p]
             # u_v = tf.nn.l2_normalize(u_v, 1)
-        graph_emb = tf.transpose(tf.matmul(W2, tf.reshape(tf.reduce_sum(u_v[1:], 0), [-1, emb_size]), transpose_b=True)) # ([p, p] x [p, 1])^T = [p, 1]^T = [1, p]
+        u_v_sum = tf.reduce_sum(u_v, 1) # [B, p]
+        graph_emb = tf.transpose(tf.matmul(W2, u_v_sum, transpose_b=True)) # [p, p] x [B, p] = [p, B]
+        print('graph_emb:', graph_emb)
         # graph_emb = tf.nn.l2_normalize(graph_emb, 1)
-    return graph_emb, W1, W2, P_n, u_v, w1_x, sigma_output
+    return graph_emb, W1, W2, P_n, u_v, W1_mul_attributes, sigma_output
 
 
 def shuffle_data(dataset):
@@ -88,36 +102,46 @@ def normalize_data(samples):
         attr_avg_std_map[attr_name] = {}
         attr_avg_std_map[attr_name]['avg'] = np.average(attr_names[attr_name])
         attr_avg_std_map[attr_name]['std'] = np.std(attr_names[attr_name])
+        if attr_avg_std_map[attr_name]['std'] == 0:
+            attr_avg_std_map[attr_name]['std'] = 1
 
     return attr_avg_std_map
 
 
-def get_graph_info_mat(graph, attr_avg_std_map, max_neighbors_num, attributes_dim, emb_size):
+def n_hot(max_node_num, ids):
+    v = np.zeros(max_node_num)
+    if ids is not None:
+        np.put(v, ids, 1)
+    return v
+
+
+def get_graph_info_mat(graph, attr_avg_std_map, max_node_num, attributes_dim, emb_size):
     graph = graph['graph']
     neighbors = []
     attributes = []
 
-    neighbors.append(np.zeros(max_neighbors_num))
+    neighbors.append(np.zeros(max_node_num))
     attributes.append(np.zeros(attributes_dim))
     undir_graph = graph.to_undirected()
     undir_graph = nx.relabel.convert_node_labels_to_integers(undir_graph, first_label=1)
-    for node_id in undir_graph.nodes:
-        neighbor_ids = list(undir_graph.neighbors(node_id)) 
-        if max_neighbors_num <= len(neighbor_ids):
-            raise ValueError('Number of neightbors of node "{}" is larger than MaxNeighborsNum: {} >= MaxNeighborsNum'.format(undir_graph.nodes[node_id], len(neighbor_ids)))
-        ns = np.pad(neighbor_ids, (0, max_neighbors_num- len(neighbor_ids)), 'constant', constant_values=0)
-        neighbors.append(ns)
-        attribute = [(undir_graph.nodes[node_id]['num_calls'] - attr_avg_std_map['num_calls']['avg']) / attr_avg_std_map['num_calls']['std'],
-                     (undir_graph.nodes[node_id]['num_transfer'] - attr_avg_std_map['num_transfer']['avg']) / attr_avg_std_map['num_transfer']['std'],
-                     (undir_graph.nodes[node_id]['num_arithmetic'] - attr_avg_std_map['num_arithmetic']['avg']) / attr_avg_std_map['num_arithmetic']['std'],
-                     (undir_graph.nodes[node_id]['num_instructions'] - attr_avg_std_map['num_instructions']['avg']) / attr_avg_std_map['num_instructions']['std'],
-                     (undir_graph.nodes[node_id]['betweenness_centrality'] - attr_avg_std_map['betweenness_centrality']['avg']) / attr_avg_std_map['betweenness_centrality']['std'],
-                     (undir_graph.nodes[node_id]['num_offspring'] - attr_avg_std_map['num_offspring']['avg']) / attr_avg_std_map['num_offspring']['std'],
-                     (undir_graph.nodes[node_id]['num_string'] - attr_avg_std_map['num_string']['avg']) / attr_avg_std_map['num_string']['std'],
-                     (undir_graph.nodes[node_id]['num_numeric_constant'] - attr_avg_std_map['num_numeric_constant']['avg']) / attr_avg_std_map['num_numeric_constant']['std'],
-                     ]
-        attributes.append(attribute)
-    return neighbors, attributes, np.zeros((len(graph.nodes), emb_size))
+
+    if max_node_num <= len(undir_graph):
+        raise ValueError('Number of nodes in graph "{}" is larger than MaxNodeNum: {} >= MaxNodeNum'.format(undir_graph, len(undir_graph)))
+
+    attr_names = ['num_calls', 'num_transfer', 'num_arithmetic', 'num_instructions', 'betweenness_centrality', 'num_offspring', 'num_string', 'num_numeric_constant']
+    for idx in range(1, max_node_num):
+        node_id = idx
+        if node_id in undir_graph.nodes:
+            neighbor_ids = list(undir_graph.neighbors(node_id)) 
+            neighbors.append(n_hot(max_node_num, neighbor_ids))
+            attrs = []
+            for attr_name in attr_names:
+                attrs.append((undir_graph.nodes[node_id][attr_name] - attr_avg_std_map[attr_name]['avg']) / attr_avg_std_map[attr_name]['std'])
+            attributes.append(attrs)
+        else:
+            neighbors.append(n_hot(max_node_num, None))
+            attributes.append(np.zeros(attributes_dim))
+    return neighbors, attributes, np.zeros((max_node_num, emb_size))
 
 
 def write_debug_mats(sess, ops, feed_dict, root_dir, sample_pair, information):
@@ -151,6 +175,27 @@ def write_debug_mats(sess, ops, feed_dict, root_dir, sample_pair, information):
     return
 
 
+def convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim):
+    neighbors_ls = []
+    neighbors_rs = []
+    attributes_ls = []
+    attributes_rs = []
+    u_init_ls = []
+    u_init_rs = []
+
+    for sample in samples:
+        neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0], attr_avg_std_map, args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
+        neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1], attr_avg_std_map, args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
+        neighbors_ls.append(neighbors_l)
+        neighbors_rs.append(neighbors_r)
+        attributes_ls.append(attributes_l)
+        attributes_rs.append(attributes_r)
+        u_init_ls.append(u_init_l)
+        u_init_rs.append(u_init_r)
+
+    return neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description='Train the graph embedding network for function flow graph.')
     parser.add_argument('TrainingDataPlk', help='The pickle format training data.')
@@ -165,8 +210,10 @@ def main(argv):
     parser.add_argument('--no-UpdateModel', dest='UpdateModel', help='Do not update the model.', action='store_false')
     parser.set_defaults(UpdateModel=False)
     parser.add_argument('--GPU_ID', type=int, default=0, help='The GPU ID of the GPU card.')
+    parser.add_argument('--BatchSize', type=int, default=32, help='Number of step per-epoch.')
+    parser.add_argument('--LearningRate', type=float, default=0.0001, help='The learning rate for the model.')
     parser.add_argument('--T', type=int, default=5, help='The T parameter in the model.(How many hops to propagate information to.)')
-    parser.add_argument('--MaxNeighborsNum', type=int, default=20, help='The max number of neighbords for a single node.(Limited by my implementation.)')
+    parser.add_argument('--MaxNodeNum', type=int, default=200, help='The max number of nodes per ACFG.')
     parser.add_argument('--NumberOfRelu', type=int, default=2, help='The number of relu layer in the sigma function.')
     parser.add_argument('--EmbeddingSize', type=int, default=64, help='The dimension of the embedding vectors.')
     parser.add_argument('--DebugMatsDir', help='The dimension of the embedding vectors.')
@@ -195,26 +242,29 @@ def main(argv):
     if not args.StartIPython:
         with tf.variable_scope("siamese") as scope:
             # Build Training Graph
-            neighbors_left = tf.placeholder(tf.int32, shape=(None, args.MaxNeighborsNum)) # N x MaxNeighborsNum
-            attributes_left = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
-            u_init_left = tf.placeholder(tf.float32, shape=(None, args.EmbeddingSize)) # N x p
+            neighbors_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum)) # B x N x N
+            attributes_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim)) # B x N x d
+            u_init_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize)) # B x N x p
             graph_emb_left, W1, W2, P_n, u_left, W1_mul_X_left, sigma_output_left = build_emb_graph(neighbors_left, attributes_left, u_init_left, # N x p
                                                                                                     attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
 
             scope.reuse_variables()
 
-            neighbors_right = tf.placeholder(tf.int32, shape=(None, args.MaxNeighborsNum)) # N x MaxNeighborsNum
-            attributes_right = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
-            u_init_right = tf.placeholder(tf.float32, shape=(None, args.EmbeddingSize)) # N x p
+            neighbors_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum)) #B x N x N
+            attributes_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim)) # B x N x d
+            u_init_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize)) # B x N x p
             graph_emb_right, W1, W2, P_n, u_right, W1_mul_X_right, sigma_output_right = build_emb_graph(neighbors_right, attributes_right, u_init_right, # N x p
                                                                                                         attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
 
-            label = tf.placeholder(tf.float32)
+            label = tf.placeholder(tf.float32, shape=(None, ))
 
             norm_emb_left = tf.nn.l2_normalize(graph_emb_left, 1)
             norm_emb_right = tf.nn.l2_normalize(graph_emb_right, 1)
-            cos_similarity = tf.reduce_sum(tf.multiply(norm_emb_left, norm_emb_right))
-            loss_op = tf.square(cos_similarity - label)
+            cos_similarity = tf.reduce_sum(tf.multiply(norm_emb_left, norm_emb_right), 1)
+            loss_op = tf.reduce_mean(tf.square(cos_similarity - label))
+
+            accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.sign(cos_similarity), label), tf.float32)) / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
+
             # This is vic's loss function
             # loss_op = (1 + label) * (-0.5 + tf.sigmoid(tf.reduce_mean(tf.squared_difference(graph_emb_left, graph_emb_right)))) + (1 - label) * tf.square(1 + cos_similarity)
 
@@ -223,21 +273,41 @@ def main(argv):
                          'W1_mul_X_left': W1_mul_X_left, 'W1_mul_X_right': W1_mul_X_right,
                          'sigma_output_left': sigma_output_left, 'sigma_output_right': sigma_output_right}
 
-        train_op = tf.train.AdamOptimizer(0.0001).minimize(loss_op)
+        train_op = tf.train.AdamOptimizer(args.LearningRate).minimize(loss_op)
     else: 
         with tf.variable_scope("siamese") as scope:
             # Bulid Inference Graph
-            neighbors_test = tf.placeholder(tf.int32, shape=(None, args.MaxNeighborsNum)) # N x MaxNeighborsNum
+            neighbors_test = tf.placeholder(tf.float32, shape=(None, args.MaxNeighborsNum)) # N x MaxNeighborsNum
             attributes_test = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
             u_init_test = tf.placeholder(tf.float32, shape=(None, args.EmbeddingSize)) # N x p
             graph_emb, W1, W2, P_n, u_v, w1_x, sigma_output = build_emb_graph(neighbors_test, attributes_test, u_init_test, # N x p
                                                                               attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
 
+    samples, labels = shuffle_data(learning_data['train'])
+    neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs = convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim)
+
+    neighbors_ls = np.asarray(neighbors_ls)
+    neighbors_rs = np.asarray(neighbors_rs)
+    attributes_ls = np.asarray(attributes_ls)
+    attributes_rs = np.asarray(attributes_rs)
+    u_init_ls = np.asarray(u_init_ls)
+    u_init_rs = np.asarray(u_init_rs)
+
+    print(neighbors_ls)
+
+    test_neighbors_ls, test_neighbors_rs, test_attributes_ls, test_attributes_rs, test_u_init_ls, test_u_init_rs = convert_to_training_data(learning_data['test']['sample'], attr_avg_std_map, args, attributes_dim)
+    test_labels = learning_data['test']['label']
+
+    batch_neighbors_ls, batch_neighbors_rs, batch_attributes_ls, batch_attributes_rs, batch_u_init_ls, batch_u_init_rs, batch_labels = tf.train.shuffle_batch([neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs, labels], batch_size=args.BatchSize, capacity=args.BatchSize * 5, min_after_dequeue=args.BatchSize * 4, enqueue_many=True)
+
     saver = tf.train.Saver()
     init_op = tf.global_variables_initializer()
 
     with tf.Session() as sess:
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(coord=coord)
         train_writer = tf.summary.FileWriter(args.SaverDir, sess.graph)
+
         sess.run(init_op)
         
         if args.LoadModel:
@@ -249,6 +319,7 @@ def main(argv):
             num_epoch = 1000
             epoch_loss = float('Inf')
             total_step = 0
+            acc = 0
 
             num_positive = 0
 
@@ -256,34 +327,26 @@ def main(argv):
                 loss_sum = 0
                 cur_step = 0
                 correct = 0
-                samples, labels = learning_data['test']['sample'], learning_data['test']['label']
                 if cur_epoch != 0:
-                    for sample, ground_truth in zip(samples, labels):
-                        neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0], attr_avg_std_map, args.MaxNeighborsNum, attributes_dim, args.EmbeddingSize)
-                        neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1], attr_avg_std_map, args.MaxNeighborsNum, attributes_dim, args.EmbeddingSize)
-                        sim = sess.run(cos_similarity, {
-                            neighbors_left: neighbors_l, attributes_left: attributes_l, u_init_left: u_init_l,
-                            neighbors_right: neighbors_r, attributes_right: attributes_r, u_init_right: u_init_r,
-                        })
-                        if sim > 0 and ground_truth == 1:
-                            correct += 1
-                        elif sim < 0 and ground_truth == -1:
-                            correct += 1
+                    acc = sess.run(accuracy, {
+                        neighbors_left: test_neighbors_ls, attributes_left: test_attributes_ls, u_init_left: test_u_init_ls,
+                        neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
+                        label: test_labels
+                    })
 
-                samples, labels = shuffle_data(learning_data['train'])
                 # samples, labels = learning_data['train']['sample'], learning_data['train']['label']
 
-                for sample, ground_truth in zip(samples, labels):
-                    # Build neighbors, attributes, and u_init
-                    neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0], attr_avg_std_map, args.MaxNeighborsNum, attributes_dim, args.EmbeddingSize)
-                    neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1], attr_avg_std_map, args.MaxNeighborsNum, attributes_dim, args.EmbeddingSize)
+                while cur_step < len(samples):
+                    cur_neighbors_ls, cur_neighbors_rs, cur_attributes_ls, cur_attributes_rs, cur_u_init_ls, cur_u_init_rs, cur_labels = sess.run([batch_neighbors_ls, batch_neighbors_rs, batch_attributes_ls, batch_attributes_rs, batch_u_init_ls, batch_u_init_rs, batch_labels])
 
                     _, loss = sess.run([train_op, loss_op], {
-                        neighbors_left: neighbors_l, attributes_left: attributes_l, u_init_left: u_init_l,
-                        neighbors_right: neighbors_r, attributes_right: attributes_r, u_init_right: u_init_r,
-                        label: ground_truth
+                        neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
+                        neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
+                        label: cur_labels
                     })
-                    sys.stdout.write('Epoch: {:10}, Loss: {:15.10f}, Step: {:10}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, correct/len(learning_data['test']['sample'])))
+                    cur_step += len(cur_neighbors_ls)
+                    
+                    sys.stdout.write('Epoch: {:10}, Loss: {:15.10f}, Step: {:10}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, acc))
                     sys.stdout.flush()
 
                     if args.Debug and (loss > 7 or (loss < 0.1 and loss > 0)):
@@ -303,8 +366,7 @@ def main(argv):
                     train_writer.add_summary(acc_summary, global_step=total_step)
                     train_writer.add_summary(loss_summary, global_step=total_step)
 
-                    cur_step += 1 
-                    total_step += 1
+                    total_step += len(cur_neighbors_ls)
                     loss_sum += loss
                 print()
                 epoch_loss = (loss_sum / len(samples))
