@@ -97,6 +97,7 @@ def main(argv):
     parser = argparse.ArgumentParser(description='Create ACFG for each binary given by list file parameter and output them as pickle file.')
     parser.add_argument('BinaryListFile', help='A text file contains a list of binary file path.')
     parser.add_argument('SQLiteFile', help='A output sqlite db file to save information about binaries.')
+    parser.add_argument('--NumOfProcesses', type=int, default=10, help='A output sqlite db file to save information about binaries.')
     args = parser.parse_args()
 
     with open(args.BinaryListFile, 'r') as f:
@@ -122,7 +123,7 @@ def main(argv):
     lock = manager.Lock()
     p = multiprocessing.Pool()
 
-    num_process = 5
+    num_process = args.NumOfProcesses
     for i in range(num_process):
         p.apply_async(create_acfg_process, args=(q, lock, args.SQLiteFile, counter,))
     p.apply_async(progressbar_process, args=(q, lock, counter,))
