@@ -61,7 +61,7 @@ def num_arithmetic(code, arch):
 
 def num_string(code, arch):
     arch = check_arch(arch)
-    arch_ins_pattern = {'arm': r'.*;\s*".*"', 'x86': r'.*;\s*".*"'}
+    arch_ins_pattern = {'arm': r'.*;[^"]*".*"', 'x86': r'.*;[^"]*".*"'}
     counter = 0
     code = code.replace('\\l', '\n')
     instructions = re.findall(r'(.*)(?<!:)\n', code)
