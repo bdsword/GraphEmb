@@ -286,19 +286,17 @@ def main(argv):
     samples, labels = shuffle_data(learning_data['train'])
     neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs = convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim)
 
+    '''
     neighbors_ls = np.asarray(neighbors_ls)
     neighbors_rs = np.asarray(neighbors_rs)
     attributes_ls = np.asarray(attributes_ls)
     attributes_rs = np.asarray(attributes_rs)
     u_init_ls = np.asarray(u_init_ls)
     u_init_rs = np.asarray(u_init_rs)
-
-    print(neighbors_ls)
+    '''
 
     test_neighbors_ls, test_neighbors_rs, test_attributes_ls, test_attributes_rs, test_u_init_ls, test_u_init_rs = convert_to_training_data(learning_data['test']['sample'], attr_avg_std_map, args, attributes_dim)
     test_labels = learning_data['test']['label']
-
-    batch_neighbors_ls, batch_neighbors_rs, batch_attributes_ls, batch_attributes_rs, batch_u_init_ls, batch_u_init_rs, batch_labels = tf.train.shuffle_batch([neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs, labels], batch_size=args.BatchSize, capacity=args.BatchSize * 5, min_after_dequeue=args.BatchSize * 4, enqueue_many=True)
 
     saver = tf.train.Saver()
     init_op = tf.global_variables_initializer()
@@ -337,7 +335,22 @@ def main(argv):
                 # samples, labels = learning_data['train']['sample'], learning_data['train']['label']
 
                 while cur_step < len(samples):
-                    cur_neighbors_ls, cur_neighbors_rs, cur_attributes_ls, cur_attributes_rs, cur_u_init_ls, cur_u_init_rs, cur_labels = sess.run([batch_neighbors_ls, batch_neighbors_rs, batch_attributes_ls, batch_attributes_rs, batch_u_init_ls, batch_u_init_rs, batch_labels])
+                    if len(samples) - cur_step > args.BatchSize:
+                        cur_neighbors_ls  = neighbors_ls [cur_step: cur_step + args.BatchSize]
+                        cur_neighbors_rs  = neighbors_rs [cur_step: cur_step + args.BatchSize]
+                        cur_attributes_ls = attributes_ls[cur_step: cur_step + args.BatchSize]
+                        cur_attributes_rs = attributes_rs[cur_step: cur_step + args.BatchSize]
+                        cur_u_init_ls     = u_init_ls    [cur_step: cur_step + args.BatchSize]
+                        cur_u_init_rs     = u_init_rs    [cur_step: cur_step + args.BatchSize]
+                        cur_labels        = labels       [cur_step: cur_step + args.BatchSize]
+                    else:
+                        cur_neighbors_ls  = neighbors_ls [cur_step:]
+                        cur_neighbors_rs  = neighbors_rs [cur_step:]
+                        cur_attributes_ls = attributes_ls[cur_step:]
+                        cur_attributes_rs = attributes_rs[cur_step:]
+                        cur_u_init_ls     = u_init_ls    [cur_step:]
+                        cur_u_init_rs     = u_init_rs    [cur_step:]
+                        cur_labels        = labels       [cur_step:]
 
                     _, loss = sess.run([train_op, loss_op], {
                         neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
