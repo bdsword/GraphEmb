@@ -24,7 +24,8 @@ def main(argv):
     parser.add_argument('OutputPlk', help='Path to the output pickle file.')
     parser.add_argument('--Seed', type=int, default=0, help='Seed to the random number generator.')
     parser.add_argument('--Archs', choices=archs, default=archs, nargs='*', help='Archs to be selected.')
-    parser.add_argument('--AcceptMinNodeNum', type=int, help='Minimal number of nodes accepted. (Node number <= this arguments are accepted.)')
+    parser.add_argument('--AcceptMinNodeNum', type=int, help='Minimal number of nodes accepted. (Node number >= this arguments are accepted.)')
+    parser.add_argument('--AcceptMaxNodeNum', type=int, help='Maximal number of nodes accepted. (Node number <= this arguments are accepted.)')
     args = parser.parse_args()
 
     TABLE_NAME = 'flow_graph_acfg'
@@ -86,6 +87,9 @@ def main(argv):
         if args.AcceptMinNodeNum and (len(graph_left) < args.AcceptMinNodeNum or len(graph_right) < args.AcceptMinNodeNum):
             continue
 
+        if args.AcceptMaxNodeNum and (len(graph_left) > args.AcceptMaxNodeNum or len(graph_right) > args.AcceptMaxNodeNum):
+            continue
+
         # Check the pattern have not been used
         if '{}_{}'.format(data_pattern_left, data_pattern_right) not in used_pattern and '{}_{}'.format(data_pattern_right, data_pattern_left) not in used_pattern:
             # Append data pair to positive_pool
@@ -112,6 +116,9 @@ def main(argv):
         graph_right = load_graph(row_pair[1][1])
 
         if args.AcceptMinNodeNum and (len(graph_left) < args.AcceptMinNodeNum or len(graph_right) < args.AcceptMinNodeNum):
+            continue
+
+        if args.AcceptMaxNodeNum and (len(graph_left) > args.AcceptMaxNodeNum or len(graph_right) > args.AcceptMaxNodeNum):
             continue
 
         data_pattern_left = '{}:{}:{}'.format(row_pair[0][4], row_pair[0][2], row_pair[0][3])
