@@ -4,6 +4,8 @@ import networkx as nx
 import tensorflow as tf
 import os
 import sys
+import shutil
+import csv
 import numpy as np
 from utils import _start_shell
 from random import shuffle
@@ -48,14 +50,9 @@ def build_emb_graph(neighbors, attributes, u_init, attributes_dim, emb_size, T, 
         u_v = u_init
 
         B, N, p = tf.shape(u_v)[0], tf.shape(u_v)[1], tf.shape(u_v)[2]
-        print('B:', B)
-        print('N:', N)
-        print('p:', p)
-        print('neighbors:', neighbors)
 
         for t in range(T):
             l_vs = tf.matmul(neighbors, u_v) # [B, N, N] x [B, N, p] = [B, N, p]
-            print('l_vs:', l_vs)
             sigma_output = sigma_function(l_vs, P_n, relu_layer_num, B, N, p) # [B, N, p]
 
             # Batch-wised: W1 x attributes
@@ -68,7 +65,6 @@ def build_emb_graph(neighbors, attributes, u_init, attributes_dim, emb_size, T, 
             # u_v = tf.nn.l2_normalize(u_v, 1)
         u_v_sum = tf.reduce_sum(u_v, 1) # [B, p]
         graph_emb = tf.transpose(tf.matmul(W2, u_v_sum, transpose_b=True)) # [p, p] x [B, p] = [p, B]
-        print('graph_emb:', graph_emb)
         # graph_emb = tf.nn.l2_normalize(graph_emb, 1)
     return graph_emb, W1, W2, P_n, u_v, W1_mul_attributes, sigma_output
 
@@ -196,12 +192,26 @@ def convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim):
     return neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs
 
 
+def ask_to_clean_dir(dir_path):
+    if len(os.listdir(dir_path)) != 0:
+        choice = input('Do you want to delete all the files in the {}? (y/n)'.format(dir_path)).lower()
+        if choice == 'y' or choice == 'yes':
+            shutil.rmtree(dir_path)
+            os.mkdir(dir_path)
+            return True
+        else:
+            print('{} is not empty, it is impossible to update the data inside this folder.'.format(dir_path))
+            return False
+    return True
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description='Train the graph embedding network for function flow graph.')
     parser.add_argument('TrainingDataPlk', help='The pickle format training data.')
-    parser.add_argument('SaverDir', help='The folder to save the model.')
-    parser.add_argument('--LoadModel', dest='LoadModel', help='Load old model in SaverDir.', action='store_true')
-    parser.add_argument('--no-LoadModel', dest='LoadModel', help='Do not load old model in SaverDir.', action='store_false')
+    parser.add_argument('MODEL_DIR', help='The folder to save the model.')
+    parser.add_argument('LOG_DIR', help='The folder to save the model log.')
+    parser.add_argument('--LoadModel', dest='LoadModel', help='Load old model in MODEL_DIR.', action='store_true')
+    parser.add_argument('--no-LoadModel', dest='LoadModel', help='Do not load old model in MODEL_DIR.', action='store_false')
     parser.set_defaults(LoadModel=False)
     parser.add_argument('--StartIPython', dest='StartIPython', help='Start IPython shell.', action='store_true')
     parser.add_argument('--no-StartIPython', dest='StartIPython', help='Do not start IPython shell.', action='store_false')
@@ -220,26 +230,38 @@ def main(argv):
     parser.add_argument('--Debug', dest='Debug', help='Debug mode on.', action='store_true')
     parser.add_argument('--no-Debug', dest='Debug', help='Debug mode off.', action='store_false')
     parser.set_defaults(Debug=False)
+    parser.add_argument('--TSNE_Mode', dest='TSNE_Mode', help='T-SNE mode on', action='store_true')
+    parser.add_argument('--no-TSNE_Mode', dest='TSNE_Mode', help='T-SNE mode off', action='store_false')
+    parser.set_defaults(TSNE_Mode=False)
+    parser.add_argument('--TSNE_InputData', help='Data to generate embedding and do T-SNE.')
+    parser.add_argument('--TF_LOG_LEVEL', default=3, type=int, help='Environment variable to TF_CPP_MIN_LOG_LEVEL')
     args = parser.parse_args()
 
-    os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-    os.environ["CUDA_VISIBLE_DEVICES"]=str(args.GPU_ID)
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.GPU_ID)
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = str(args.TF_LOG_LEVEL)
 
     attributes_dim = get_number_of_attribute()
 
-    if not os.path.isdir(args.SaverDir):
-        print('Saver folder should be a valid folder.')
+    if not os.path.isdir(args.MODEL_DIR):
+        print('MODEL_DIR folder should be a valid folder.')
         sys.exit(-2)
+    elif not args.LoadModel:
+        if not ask_to_clean_dir(args.MODEL_DIR):
+            sys.exit(-3)
+        if not ask_to_clean_dir(args.LOG_DIR):
+            sys.exit(-4)
 
     if args.Debug and not args.DebugMatsDir:
         print('DebugMatsDir should be set when Debug mode is on.')
-        sys.exit(-2)
+        sys.exit(-5)
 
     with open(args.TrainingDataPlk, 'rb') as f:
         learning_data = pickle.load(f)
         attr_avg_std_map = normalize_data(learning_data['train']['sample'])
 
-    if not args.StartIPython:
+    print('Building model graph...... ')
+    if not args.StartIPython and not args.TSNE_Mode:
         with tf.variable_scope("siamese") as scope:
             # Build Training Graph
             neighbors_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum)) # B x N x N
@@ -267,6 +289,9 @@ def main(argv):
 
             # This is vic's loss function
             # loss_op = (1 + label) * (-0.5 + tf.sigmoid(tf.reduce_mean(tf.squared_difference(graph_emb_left, graph_emb_right)))) + (1 - label) * tf.square(1 + cos_similarity)
+            tf.summary.scalar('accuracy', accuracy)
+            tf.summary.scalar('loss', loss_op)
+            merged = tf.summary.merge_all()
 
             # Operations for debug
             debug_ops = {'W1': W1, 'W2': W2, 'P_n': P_n, 'u_left': u_left, 'u_right': u_right,
@@ -277,50 +302,88 @@ def main(argv):
     else: 
         with tf.variable_scope("siamese") as scope:
             # Bulid Inference Graph
-            neighbors_test = tf.placeholder(tf.float32, shape=(None, args.MaxNeighborsNum)) # N x MaxNeighborsNum
-            attributes_test = tf.placeholder(tf.float32, shape=(None, attributes_dim)) # N x d
-            u_init_test = tf.placeholder(tf.float32, shape=(None, args.EmbeddingSize)) # N x p
-            graph_emb, W1, W2, P_n, u_v, w1_x, sigma_output = build_emb_graph(neighbors_test, attributes_test, u_init_test, # N x p
-                                                                              attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
+            neighbors_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum))
+            attributes_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim))
+            u_init_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize))
+            graph_emb, W1, W2, P_n, u_v, W1_mul_X, sigma_output = build_emb_graph(neighbors_test, attributes_test, u_init_test,
+                                                                                  attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
+    
+    print('Preparing the data for the model...... ')
+    if args.TSNE_Mode:
+        tsne_data = {'samples': None, 'labels': []}
+        tsne_neighbors = []
+        tsne_attributes = []
+        tsne_u_inits = []
+        with open(args.TSNE_InputData, 'rb') as f_in:
+            data = pickle.load(f_in)
+            for sample in data:
+                neighbors, attributes, u_init = get_graph_info_mat(sample, attr_avg_std_map, args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
+                tsne_neighbors.append(neighbors)
+                tsne_attributes.append(attributes)
+                tsne_u_inits.append(u_init)
+                tsne_data['labels'].append(sample['identifier'])
+    else:
+        samples, labels = shuffle_data(learning_data['train'])
+        neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs = convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim)
 
-    samples, labels = shuffle_data(learning_data['train'])
-    neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs = convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim)
+        test_neighbors_ls, test_neighbors_rs, test_attributes_ls, test_attributes_rs, test_u_init_ls, test_u_init_rs = convert_to_training_data(learning_data['test']['sample'], attr_avg_std_map, args, attributes_dim)
+        test_labels = learning_data['test']['label']
 
-    '''
-    neighbors_ls = np.asarray(neighbors_ls)
-    neighbors_rs = np.asarray(neighbors_rs)
-    attributes_ls = np.asarray(attributes_ls)
-    attributes_rs = np.asarray(attributes_rs)
-    u_init_ls = np.asarray(u_init_ls)
-    u_init_rs = np.asarray(u_init_rs)
-    '''
-
-    test_neighbors_ls, test_neighbors_rs, test_attributes_ls, test_attributes_rs, test_u_init_ls, test_u_init_rs = convert_to_training_data(learning_data['test']['sample'], attr_avg_std_map, args, attributes_dim)
-    test_labels = learning_data['test']['label']
-
-    saver = tf.train.Saver()
     init_op = tf.global_variables_initializer()
 
+    saver = tf.train.Saver()
+
+    print('Starting the tensorflow session......')
     with tf.Session() as sess:
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(coord=coord)
-        train_writer = tf.summary.FileWriter(args.SaverDir, sess.graph)
+        train_writer = tf.summary.FileWriter(os.path.join(args.LOG_DIR, 'train'), sess.graph)
 
         sess.run(init_op)
         
         if args.LoadModel:
-            states = tf.train.get_checkpoint_state(args.SaverDir)
+            print('Loading the stored model......')
+            states = tf.train.get_checkpoint_state(args.MODEL_DIR)
             saver.restore(sess, states.model_checkpoint_path)
         if args.StartIPython:
             _start_shell(locals(), globals())
+        elif args.TSNE_Mode:
+            print('Start in t-SNE mode (Do embeddings for {})'.format(args.TSNE_InputData))
+            count = 0
+            embs = []
+            while count < len(data):
+                if len(data) - count > args.BatchSize:
+                    cur_neighbors  = tsne_neighbors [count: count + args.BatchSize]
+                    cur_attributes = tsne_attributes[count: count + args.BatchSize]
+                    cur_u_inits    = tsne_u_inits   [count: count + args.BatchSize]
+                else:
+                    cur_neighbors  = tsne_neighbors [count:]
+                    cur_attributes = tsne_attributes[count:]
+                    cur_u_inits    = tsne_u_inits   [count:]
+                embs += sess.run(graph_emb, {neighbors_test: cur_neighbors, attributes_test: cur_attributes, u_init_test: cur_u_inits}).tolist()
+                count += len(cur_neighbors)
+            tsne_data['samples'] = embs
+            emb_plk_path = os.path.join(args.LOG_DIR, 'embeddings.plk')
+            print('Writing embeddings.plk file to {}......'.format(emb_plk_path))
+            with open(emb_plk_path, 'wb') as f_out:
+                pickle.dump(tsne_data, f_out)
+            metadata_path = os.path.join(args.LOG_DIR, 'metadata.tsv')
+            print('Writing metadata.csv file to {}......'.format(metadata_path))
+            with open(metadata_path, 'w', newline='') as csvfile:
+                csv_writer = csv.writer(csvfile, delimiter='\t', quotechar='\'', quoting=csv.QUOTE_MINIMAL)
+                csv_writer.writerow(['dim{}'.format(x) for x in range(args.EmbeddingSize)] + ['label'])
+                for idx, emb in enumerate(tsne_data['samples']):
+                    csv_writer.writerow(emb + [tsne_data['labels'][idx]])
+            print('Generate embedding vectors successfully. To view the visualization, please run:\n$ ./create_tsne_projector.py {} {} YOUR_EMBEDDING_LOG_DIR'.format(emb_plk_path, metadata_path))
         else:
+            print('Start in training mode.')
             num_epoch = 1000
             epoch_loss = float('Inf')
             total_step = 0
             acc = 0
 
             num_positive = 0
-
+            print('\tStart training epoch......')
             for cur_epoch in range(num_epoch):
                 loss_sum = 0
                 cur_step = 0
@@ -372,12 +435,12 @@ def main(argv):
                                 neighbors_right: neighbors_r, attributes_right: attributes_r, u_init_right: u_init_r
                             }, args.DebugMatsDir, sample, pattern)
 
-                    loss_summary = tf.Summary()
-                    loss_summary.value.add(tag='Loss', simple_value=epoch_loss)
-                    acc_summary = tf.Summary()
-                    acc_summary.value.add(tag='Accuracy', simple_value=correct/len(learning_data['test']['sample']))
-                    train_writer.add_summary(acc_summary, global_step=total_step)
-                    train_writer.add_summary(loss_summary, global_step=total_step)
+                    summary = sess.run(merged, {
+                        neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
+                        neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
+                        label: cur_labels
+                    })
+                    train_writer.add_summary(summary, total_step)
 
                     total_step += len(cur_neighbors_ls)
                     loss_sum += loss
@@ -385,7 +448,8 @@ def main(argv):
                 epoch_loss = (loss_sum / len(samples))
                 cur_epoch += 1
                 if args.UpdateModel:
-                    saver.save(sess, os.path.join(args.SaverDir, 'model.ckpt'), global_step=total_step)
+                    saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=total_step)
+            print('Training finished.')
 
 
 if __name__ == '__main__':
