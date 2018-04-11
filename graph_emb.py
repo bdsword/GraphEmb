@@ -14,6 +14,7 @@ import pickle
 import argparse
 import subprocess
 import progressbar
+from datetime import datetime
 
 
 def get_number_of_attribute():
@@ -270,7 +271,7 @@ def main(argv):
         learning_data = pickle.load(f)
         attr_avg_std_map = normalize_data(learning_data['train']['sample'])
 
-    print('Building model graph...... ')
+    print('Building model graph...... [{}]'.format(str(datetime.now())))
     if not args.StartIPython and not args.TSNE_Mode:
         with tf.variable_scope("siamese") as scope:
             # Build Training Graph
@@ -327,7 +328,7 @@ def main(argv):
             graph_emb, W1, W2, P_n, u_v, W1_mul_X, sigma_output = build_emb_graph(neighbors_test, attributes_test, u_init_test,
                                                                                   attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
     
-    print('Preparing the data for the model...... ')
+    print('Preparing the data for the model...... [{}]'.format(str(datetime.now())))
     if args.TSNE_Mode:
         tsne_data = {'samples': None, 'labels': []}
         tsne_neighbors = []
@@ -364,10 +365,10 @@ def main(argv):
                 test_u_init_rs =     packed_data['test_u_init_rs']
                 test_labels =        packed_data['test_labels']
         else:
-            print('\tConverting training data...')
+            print('\tConverting training data... [{}]'.format(str(datetime.now())))
             neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs = convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim)
 
-            print('\tConverting testing data...')
+            print('\tConverting testing data... [{}]'.format(str(datetime.now())))
             test_neighbors_ls, test_neighbors_rs, test_attributes_ls, test_attributes_rs, test_u_init_ls, test_u_init_rs = convert_to_training_data(learning_data['test']['sample'], attr_avg_std_map, args, attributes_dim)
             test_labels = learning_data['test']['label']
 
@@ -395,7 +396,7 @@ def main(argv):
 
     saver = tf.train.Saver()
 
-    print('Starting the tensorflow session......')
+    print('Starting the tensorflow session...... [{}]'.format(str(datetime.now())))
     with tf.Session() as sess:
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(coord=coord)
@@ -404,13 +405,13 @@ def main(argv):
         sess.run(init_op)
         
         if args.LoadModel:
-            print('Loading the stored model......')
+            print('Loading the stored model...... [{}]'.format(str(datetime.now())))
             states = tf.train.get_checkpoint_state(args.MODEL_DIR)
             saver.restore(sess, states.model_checkpoint_path)
         if args.StartIPython:
             _start_shell(locals(), globals())
         elif args.TSNE_Mode:
-            print('Start in t-SNE mode (Do embeddings for {})'.format(args.TSNE_InputData))
+            print('Start in t-SNE mode (Do embeddings for {}) [{}]'.format(args.TSNE_InputData, str(datetime.now())))
             count = 0
             embs = []
             while count < len(data):
@@ -426,11 +427,11 @@ def main(argv):
                 count += len(cur_neighbors)
             tsne_data['samples'] = embs
             emb_plk_path = os.path.join(args.LOG_DIR, 'embeddings.plk')
-            print('Writing embeddings.plk file to {}......'.format(emb_plk_path))
+            print('Writing embeddings.plk file to {}...... [{}]'.format(emb_plk_path, str(datetime.now())))
             with open(emb_plk_path, 'wb') as f_out:
                 pickle.dump(tsne_data, f_out)
             metadata_path = os.path.join(args.LOG_DIR, 'metadata.tsv')
-            print('Writing metadata.csv file to {}......'.format(metadata_path))
+            print('Writing metadata.csv file to {}...... [{}]'.format(metadata_path, str(datetime.now())))
             with open(metadata_path, 'w', newline='') as csvfile:
                 csv_writer = csv.writer(csvfile, delimiter='\t', quotechar='\'', quoting=csv.QUOTE_MINIMAL)
                 csv_writer.writerow(['dim{}'.format(x) for x in range(args.EmbeddingSize)] + ['label'])
@@ -438,7 +439,7 @@ def main(argv):
                     csv_writer.writerow(emb + [tsne_data['labels'][idx]])
             print('Generate embedding vectors successfully. To view the visualization, please run:\n$ ./create_tsne_projector.py {} {} YOUR_EMBEDDING_LOG_DIR'.format(emb_plk_path, metadata_path))
         else:
-            print('Start in training mode.')
+            print('Start in training mode. [{}]'.format(str(datetime.now())))
             num_epoch = 1000
             epoch_loss = float('Inf')
             total_step = 0
@@ -446,7 +447,7 @@ def main(argv):
             test_acc = 0
 
             num_positive = 0
-            print('\tStart training epoch......')
+            print('\tStart training epoch...... [{}]'.format(str(datetime.now())))
             for cur_epoch in range(num_epoch):
                 loss_sum = 0
                 cur_step = 0
@@ -529,7 +530,7 @@ def main(argv):
                 cur_epoch += 1
                 if args.UpdateModel:
                     saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=total_step)
-            print('Training finished.')
+            print('Training finished. [{}]'.format(str(datetime.now())))
 
 
 if __name__ == '__main__':
