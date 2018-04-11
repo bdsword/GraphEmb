@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import networkx as nx
+import math
 import tensorflow as tf
 import os
 import sys
@@ -12,6 +13,7 @@ from random import shuffle
 import pickle
 import argparse
 import subprocess
+import progressbar
 
 
 def get_number_of_attribute():
@@ -160,12 +162,12 @@ def write_debug_mats(sess, ops, feed_dict, root_dir, sample_pair, information):
     subprocess.check_call(['dot', '-Tpng', '-O', right_dot_path])
     np.savetxt(os.path.join(target_dir, 'W1.csv'), W1, delimiter=',')
     np.savetxt(os.path.join(target_dir, 'W2.csv'), W2, delimiter=',')
-    np.savetxt(os.path.join(target_dir, 'u_left.csv'), u_left, delimiter=',')
-    np.savetxt(os.path.join(target_dir, 'u_right.csv'), u_right, delimiter=',')
-    np.savetxt(os.path.join(target_dir, 'W1_X_left.csv'), W1_mul_X_left, delimiter=',')
-    np.savetxt(os.path.join(target_dir, 'W1_X_right.csv'), W1_mul_X_right, delimiter=',')
-    np.savetxt(os.path.join(target_dir, 'sigma_out_left.csv'), sigma_output_left, delimiter=',')
-    np.savetxt(os.path.join(target_dir, 'sigma_out_right.csv'), sigma_output_right, delimiter=',')
+    np.savetxt(os.path.join(target_dir, 'u_left.csv'), u_left[0], delimiter=',')
+    np.savetxt(os.path.join(target_dir, 'u_right.csv'), u_right[0], delimiter=',')
+    np.savetxt(os.path.join(target_dir, 'W1_X_left.csv'), W1_mul_X_left[0], delimiter=',')
+    np.savetxt(os.path.join(target_dir, 'W1_X_right.csv'), W1_mul_X_right[0], delimiter=',')
+    np.savetxt(os.path.join(target_dir, 'sigma_out_left.csv'), sigma_output_left[0], delimiter=',')
+    np.savetxt(os.path.join(target_dir, 'sigma_out_right.csv'), sigma_output_right[0], delimiter=',')
     for i in range(len(P_n)):
         np.savetxt(os.path.join(target_dir, 'P_{}.csv'.format(i)), P_n[i], delimiter=',')
     return
@@ -179,6 +181,8 @@ def convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim):
     u_init_ls = []
     u_init_rs = []
 
+    counter = 0
+    bar = progressbar.ProgressBar(max_value=len(samples))
     for sample in samples:
         neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0], attr_avg_std_map, args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
         neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1], attr_avg_std_map, args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
@@ -188,6 +192,8 @@ def convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim):
         attributes_rs.append(attributes_r)
         u_init_ls.append(u_init_l)
         u_init_rs.append(u_init_r)
+        counter += 1
+        bar.update(counter)
 
     return neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs
 
@@ -208,6 +214,7 @@ def ask_to_clean_dir(dir_path):
 def main(argv):
     parser = argparse.ArgumentParser(description='Train the graph embedding network for function flow graph.')
     parser.add_argument('TrainingDataPlk', help='The pickle format training data.')
+    parser.add_argument('PackedData', help='Path to store the packed learning data.')
     parser.add_argument('MODEL_DIR', help='The folder to save the model.')
     parser.add_argument('LOG_DIR', help='The folder to save the model log.')
     parser.add_argument('--LoadModel', dest='LoadModel', help='Load old model in MODEL_DIR.', action='store_true')
@@ -233,6 +240,9 @@ def main(argv):
     parser.add_argument('--TSNE_Mode', dest='TSNE_Mode', help='T-SNE mode on', action='store_true')
     parser.add_argument('--no-TSNE_Mode', dest='TSNE_Mode', help='T-SNE mode off', action='store_false')
     parser.set_defaults(TSNE_Mode=False)
+    parser.add_argument('--ShuffleLearningData', dest='ShuffleLearningData', help='Learning data shuffle mode on', action='store_true')
+    parser.add_argument('--no-ShuffleLearningData', dest='ShuffleLearningData', help='Learning data shuffle mode off', action='store_false')
+    parser.set_defaults(ShuffleLearningData=False)
     parser.add_argument('--TSNE_InputData', help='Data to generate embedding and do T-SNE.')
     parser.add_argument('--TF_LOG_LEVEL', default=3, type=int, help='Environment variable to TF_CPP_MIN_LOG_LEVEL')
     args = parser.parse_args()
@@ -254,7 +264,7 @@ def main(argv):
 
     if args.Debug and not args.DebugMatsDir:
         print('DebugMatsDir should be set when Debug mode is on.')
-        sys.exit(-5)
+        sys.exit(-6)
 
     with open(args.TrainingDataPlk, 'rb') as f:
         learning_data = pickle.load(f)
@@ -283,9 +293,18 @@ def main(argv):
             norm_emb_left = tf.nn.l2_normalize(graph_emb_left, 1)
             norm_emb_right = tf.nn.l2_normalize(graph_emb_right, 1)
             cos_similarity = tf.reduce_sum(tf.multiply(norm_emb_left, norm_emb_right), 1)
-            loss_op = tf.reduce_mean(tf.square(cos_similarity - label))
+            # loss_op = tf.reduce_mean(tf.square(cos_similarity - label))
 
-            accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.sign(cos_similarity), label), tf.float32)) / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
+            rad = cos_similarity
+            loss_p = (1+label)*tf.cast(tf.less(rad, 0.7),tf.float32)*(1+0.7-rad) # > 45 degree, loss is the degree
+            loss_n = (1-label)*tf.cast(tf.greater(rad, 0.7),tf.float32)*(1+rad-0.7) # < 45 degree, loss is 45-degree
+            loss_op = tf.reduce_mean( tf.square(loss_p + loss_n) )
+
+            # accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.sign(cos_similarity), label), tf.float32)) / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
+            cos_45 = np.cos(np.pi/4) # 1/sqrt(2)
+            accuracy = tf.add( tf.reduce_sum(tf.cast(tf.equal(tf.cast(tf.greater(cos_similarity, cos_45), tf.float32), label), tf.float32)),\
+                        tf.reduce_sum(tf.cast(tf.equal(tf.cast(tf.less(cos_similarity, cos_45), tf.float32), tf.negative(label)), tf.float32))) \
+                        / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
 
             # This is vic's loss function
             # loss_op = (1 + label) * (-0.5 + tf.sigmoid(tf.reduce_mean(tf.squared_difference(graph_emb_left, graph_emb_right)))) + (1 - label) * tf.square(1 + cos_similarity)
@@ -323,11 +342,54 @@ def main(argv):
                 tsne_u_inits.append(u_init)
                 tsne_data['labels'].append(sample['identifier'])
     else:
-        samples, labels = shuffle_data(learning_data['train'])
-        neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs = convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim)
+        if args.ShuffleLearningData:
+            samples, labels = shuffle_data(learning_data['train'])
+        else:
+            samples, labels = learning_data['train']['sample'], learning_data['train']['label']
+        if os.path.isfile(args.PackedData):
+            with open(args.PackedData, 'rb') as f:
+                packed_data = pickle.load(f)
+                neighbors_ls =       packed_data['neighbors_ls']
+                neighbors_rs =       packed_data['neighbors_rs']
+                attributes_ls =      packed_data['attributes_ls']
+                attributes_rs =      packed_data['attributes_rs']
+                u_init_ls =          packed_data['u_init_ls']
+                u_init_rs =          packed_data['u_init_rs']
+                labels =             packed_data['labels']
+                test_neighbors_ls =  packed_data['test_neighbors_ls']
+                test_neighbors_rs =  packed_data['test_neighbors_rs']
+                test_attributes_ls = packed_data['test_attributes_ls']
+                test_attributes_rs = packed_data['test_attributes_rs']
+                test_u_init_ls =     packed_data['test_u_init_ls']
+                test_u_init_rs =     packed_data['test_u_init_rs']
+                test_labels =        packed_data['test_labels']
+        else:
+            print('\tConverting training data...')
+            neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs = convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim)
 
-        test_neighbors_ls, test_neighbors_rs, test_attributes_ls, test_attributes_rs, test_u_init_ls, test_u_init_rs = convert_to_training_data(learning_data['test']['sample'], attr_avg_std_map, args, attributes_dim)
-        test_labels = learning_data['test']['label']
+            print('\tConverting testing data...')
+            test_neighbors_ls, test_neighbors_rs, test_attributes_ls, test_attributes_rs, test_u_init_ls, test_u_init_rs = convert_to_training_data(learning_data['test']['sample'], attr_avg_std_map, args, attributes_dim)
+            test_labels = learning_data['test']['label']
+
+            if args.PackedData:
+                packed_data = {
+                    'neighbors_ls'      : neighbors_ls,
+                    'neighbors_rs'      : neighbors_rs,
+                    'attributes_ls'     : attributes_ls,
+                    'attributes_rs'     : attributes_rs,
+                    'u_init_ls'         : u_init_ls,
+                    'u_init_rs'         : u_init_rs,
+                    'labels'            : labels,
+                    'test_neighbors_ls' : test_neighbors_ls,
+                    'test_neighbors_rs' : test_neighbors_rs,
+                    'test_attributes_ls': test_attributes_ls,
+                    'test_attributes_rs': test_attributes_rs,
+                    'test_u_init_ls'    : test_u_init_ls,
+                    'test_u_init_rs'    : test_u_init_rs,
+                    'test_labels'       : test_labels,
+                }
+                with open(args.PackedData, 'wb') as f:
+                    pickle.dump(packed_data, f)
 
     init_op = tf.global_variables_initializer()
 
@@ -380,7 +442,8 @@ def main(argv):
             num_epoch = 1000
             epoch_loss = float('Inf')
             total_step = 0
-            acc = 0
+            train_acc = 0
+            test_acc = 0
 
             num_positive = 0
             print('\tStart training epoch......')
@@ -389,11 +452,36 @@ def main(argv):
                 cur_step = 0
                 correct = 0
                 if cur_epoch != 0:
-                    acc = sess.run(accuracy, {
-                        neighbors_left: test_neighbors_ls, attributes_left: test_attributes_ls, u_init_left: test_u_init_ls,
+                    train_acc = sess.run(accuracy, {
+                        neighbors_left: neighbors_ls[:1000], attributes_left: attributes_ls[:1000], u_init_left: u_init_ls[:1000],
+                        neighbors_right: neighbors_rs[:1000], attributes_right: attributes_rs[:1000], u_init_right: u_init_rs[:1000],
+                        label: labels[:1000]
+                    })
+                    test_acc = sess.run(accuracy, {
+                        neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
                         neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
                         label: test_labels
                     })
+                if args.Debug:
+                    idx = 0
+                    for neighbors_l, neighbors_r, attributes_l, attributes_r, u_init_l, u_init_r, ground_truth in zip(neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs, labels):
+                        loss, sim = sess.run([loss_op, cos_similarity], {
+                            neighbors_left: [neighbors_l], attributes_left: [attributes_l], u_init_left: [u_init_l],
+                            neighbors_right: [neighbors_r], attributes_right: [attributes_r], u_init_right: [u_init_r],
+                            label: [ground_truth]
+                        })
+                        if loss > 3 or (loss < 0.1 and loss > 0):
+                            print(loss, samples[idx][0]['identifier'], samples[idx][1]['identifier'])
+                            if loss < 0.1 and loss > 0:
+                                num_positive += 1
+                            if num_positive <= 5 or loss > 3:
+                                pattern = str(ground_truth) + '_' + '{:.10E}'.format(loss) + '_' +  samples[idx][0]['identifier'] + '_' + samples[idx][1]['identifier']
+                                write_debug_mats(sess, debug_ops, {
+                                    neighbors_left: [neighbors_l], attributes_left: [attributes_l], u_init_left: [u_init_l],
+                                    neighbors_right: [neighbors_r], attributes_right: [attributes_r], u_init_right: [u_init_r]
+                                }, args.DebugMatsDir, samples[idx], pattern)
+                        idx += 1
+
 
                 # samples, labels = learning_data['train']['sample'], learning_data['train']['label']
 
@@ -422,18 +510,8 @@ def main(argv):
                     })
                     cur_step += len(cur_neighbors_ls)
                     
-                    sys.stdout.write('Epoch: {:10}, Loss: {:15.10f}, Step: {:10}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, acc))
+                    sys.stdout.write('Epoch: {:10}, BatchLoss: {:15.10f}, Step: {:10}, TrainAcc: {:6.10f}, TestAcc: {:6.10f}    \r'.format(cur_epoch, loss, cur_step, train_acc, test_acc))
                     sys.stdout.flush()
-
-                    if args.Debug and (loss > 7 or (loss < 0.1 and loss > 0)):
-                        if loss < 0.1 and loss > 0:
-                            num_positive += 1
-                        if num_positive <= 5 or loss > 7:
-                            pattern = str(ground_truth) + '_' + '{:.10E}'.format(loss) + '_' +  sample[0]['identifier'] + '_' + sample[1]['identifier']
-                            write_debug_mats(sess, debug_ops, {
-                                neighbors_left: neighbors_l, attributes_left: attributes_l, u_init_left: u_init_l,
-                                neighbors_right: neighbors_r, attributes_right: attributes_r, u_init_right: u_init_r
-                            }, args.DebugMatsDir, sample, pattern)
 
                     summary = sess.run(merged, {
                         neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
@@ -444,8 +522,10 @@ def main(argv):
 
                     total_step += len(cur_neighbors_ls)
                     loss_sum += loss
+                sys.stdout.write('Epoch: {:10}, EpochLoss: {:15.10f}, Step: {:10}, TrainAcc: {:6.10f}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, train_acc, test_acc))
+                sys.stdout.flush()
                 print()
-                epoch_loss = (loss_sum / len(samples))
+                epoch_loss = (loss_sum / math.ceil(len(samples) / args.BatchSize))
                 cur_epoch += 1
                 if args.UpdateModel:
                     saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=total_step)
