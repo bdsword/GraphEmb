@@ -273,6 +273,8 @@ def main(argv):
 
     print('Building model graph...... [{}]'.format(str(datetime.now())))
     if not args.StartIPython and not args.TSNE_Mode:
+        with tf.device('/cpu:0'):
+            global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
         with tf.variable_scope("siamese") as scope:
             # Build Training Graph
             neighbors_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum)) # B x N x N
@@ -311,6 +313,7 @@ def main(argv):
             # loss_op = (1 + label) * (-0.5 + tf.sigmoid(tf.reduce_mean(tf.squared_difference(graph_emb_left, graph_emb_right)))) + (1 - label) * tf.square(1 + cos_similarity)
             tf.summary.scalar('accuracy', accuracy)
             tf.summary.scalar('loss', loss_op)
+            tf.summary.scalar('global_step', global_step)
             merged = tf.summary.merge_all()
 
             # Operations for debug
@@ -318,7 +321,7 @@ def main(argv):
                          'W1_mul_X_left': W1_mul_X_left, 'W1_mul_X_right': W1_mul_X_right,
                          'sigma_output_left': sigma_output_left, 'sigma_output_right': sigma_output_right}
 
-        train_op = tf.train.AdamOptimizer(args.LearningRate).minimize(loss_op)
+        train_op = tf.train.AdamOptimizer(args.LearningRate).minimize(loss_op, global_step=global_step)
     else: 
         with tf.variable_scope("siamese") as scope:
             # Bulid Inference Graph
@@ -401,8 +404,6 @@ def main(argv):
 
     print('Starting the tensorflow session...... [{}]'.format(str(datetime.now())))
     with tf.Session() as sess:
-        coord = tf.train.Coordinator()
-        threads = tf.train.start_queue_runners(coord=coord)
         train_writer = tf.summary.FileWriter(os.path.join(args.LOG_DIR, 'train'), sess.graph)
 
         sess.run(init_op)
@@ -418,14 +419,9 @@ def main(argv):
             count = 0
             embs = []
             while count < len(data):
-                if len(data) - count > args.BatchSize:
-                    cur_neighbors  = tsne_neighbors [count: count + args.BatchSize]
-                    cur_attributes = tsne_attributes[count: count + args.BatchSize]
-                    cur_u_inits    = tsne_u_inits   [count: count + args.BatchSize]
-                else:
-                    cur_neighbors  = tsne_neighbors [count:]
-                    cur_attributes = tsne_attributes[count:]
-                    cur_u_inits    = tsne_u_inits   [count:]
+                cur_neighbors  = tsne_neighbors [count: count + args.BatchSize]
+                cur_attributes = tsne_attributes[count: count + args.BatchSize]
+                cur_u_inits    = tsne_u_inits   [count: count + args.BatchSize]
                 embs += sess.run(graph_emb, {neighbors_test: cur_neighbors, attributes_test: cur_attributes, u_init_test: cur_u_inits}).tolist()
                 count += len(cur_neighbors)
             tsne_data['samples'] = embs
@@ -444,8 +440,9 @@ def main(argv):
         else:
             print('Start in training mode. [{}]'.format(str(datetime.now())))
             num_epoch = 1000
+            num_step_per_epoch = int(math.ceil(len(samples) / args.BatchSize))
             epoch_loss = float('Inf')
-            total_step = 0
+            total_step = int(sess.run(global_step))
             train_acc = 0
             test_acc = 0
 
@@ -478,32 +475,23 @@ def main(argv):
                 # samples, labels = learning_data['train']['sample'], learning_data['train']['label']
 
                 num_train_correct = 0
-                while cur_step < len(samples):
-                    if len(samples) - cur_step > args.BatchSize:
-                        cur_neighbors_ls  = neighbors_ls [cur_step: cur_step + args.BatchSize]
-                        cur_neighbors_rs  = neighbors_rs [cur_step: cur_step + args.BatchSize]
-                        cur_attributes_ls = attributes_ls[cur_step: cur_step + args.BatchSize]
-                        cur_attributes_rs = attributes_rs[cur_step: cur_step + args.BatchSize]
-                        cur_u_init_ls     = u_init_ls    [cur_step: cur_step + args.BatchSize]
-                        cur_u_init_rs     = u_init_rs    [cur_step: cur_step + args.BatchSize]
-                        cur_labels        = labels       [cur_step: cur_step + args.BatchSize]
-                    else:
-                        cur_neighbors_ls  = neighbors_ls [cur_step:]
-                        cur_neighbors_rs  = neighbors_rs [cur_step:]
-                        cur_attributes_ls = attributes_ls[cur_step:]
-                        cur_attributes_rs = attributes_rs[cur_step:]
-                        cur_u_init_ls     = u_init_ls    [cur_step:]
-                        cur_u_init_rs     = u_init_rs    [cur_step:]
-                        cur_labels        = labels       [cur_step:]
+                for cur_step in range(num_step_per_epoch):
+                    cur_neighbors_ls  = neighbors_ls [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
+                    cur_neighbors_rs  = neighbors_rs [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
+                    cur_attributes_ls = attributes_ls[cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
+                    cur_attributes_rs = attributes_rs[cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
+                    cur_u_init_ls     = u_init_ls    [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
+                    cur_u_init_rs     = u_init_rs    [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
+                    cur_labels        = labels       [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
+
                     _, loss, batch_acc = sess.run([train_op, loss_op, accuracy], {
                         neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
                         neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
                         label: cur_labels
                     })
-                    cur_step += len(cur_neighbors_ls)
                     num_train_correct += batch_acc * len(cur_neighbors_ls)
                     
-                    sys.stdout.write('Epoch: {:10}, BatchLoss: {:15.10f}, Step: {:10}, TrainAcc: {:6.10f}, TestAcc: {:6.10f}    \r'.format(cur_epoch, loss, cur_step, train_acc, test_acc))
+                    sys.stdout.write('Epoch: {:10}, BatchLoss: {:15.10f}, BatchStep: {:10}, TotalStep: {:10}, TrainAcc: {:6.10f}, TestAcc: {:6.10f}    \r'.format(cur_epoch, loss, cur_step, total_step, train_acc, test_acc))
                     sys.stdout.flush()
 
                     summary = sess.run(merged, {
@@ -513,7 +501,7 @@ def main(argv):
                     })
                     train_writer.add_summary(summary, total_step)
 
-                    total_step += len(cur_neighbors_ls)
+                    total_step = int(sess.run(global_step))
                     loss_sum += loss
                 train_acc = num_train_correct / len(samples)
                 test_acc = sess.run(accuracy, {
@@ -523,11 +511,11 @@ def main(argv):
                 })
                 epoch_loss = (loss_sum / math.ceil(len(samples) / args.BatchSize))
                 cur_epoch += 1
-                sys.stdout.write('Epoch: {:10}, EpochLoss: {:15.10f}, Step: {:10}, TrainAcc: {:6.10f}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, train_acc, test_acc))
+                sys.stdout.write('Epoch: {:10}, EpochLoss: {:15.10f}, BatchStep: {:10}, TotalStep: {:10}, TrainAcc: {:6.10f}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, total_step, train_acc, test_acc))
                 sys.stdout.flush()
                 print()
                 if args.UpdateModel:
-                    saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=total_step)
+                    saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=global_step)
             print('Training finished. [{}]'.format(str(datetime.now())))
 
 
