@@ -367,30 +367,33 @@ def main(argv):
         else:
             print('\tConverting training data... [{}]'.format(str(datetime.now())))
             neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs = convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim)
-
+            print()
             print('\tConverting testing data... [{}]'.format(str(datetime.now())))
+            print()
             test_neighbors_ls, test_neighbors_rs, test_attributes_ls, test_attributes_rs, test_u_init_ls, test_u_init_rs = convert_to_training_data(learning_data['test']['sample'], attr_avg_std_map, args, attributes_dim)
             test_labels = learning_data['test']['label']
 
-            if args.PackedData:
-                packed_data = {
-                    'neighbors_ls'      : neighbors_ls,
-                    'neighbors_rs'      : neighbors_rs,
-                    'attributes_ls'     : attributes_ls,
-                    'attributes_rs'     : attributes_rs,
-                    'u_init_ls'         : u_init_ls,
-                    'u_init_rs'         : u_init_rs,
-                    'labels'            : labels,
-                    'test_neighbors_ls' : test_neighbors_ls,
-                    'test_neighbors_rs' : test_neighbors_rs,
-                    'test_attributes_ls': test_attributes_ls,
-                    'test_attributes_rs': test_attributes_rs,
-                    'test_u_init_ls'    : test_u_init_ls,
-                    'test_u_init_rs'    : test_u_init_rs,
-                    'test_labels'       : test_labels,
-                }
-                with open(args.PackedData, 'wb') as f:
-                    pickle.dump(packed_data, f)
+            packed_data = {
+                'neighbors_ls'      : neighbors_ls,
+                'neighbors_rs'      : neighbors_rs,
+                'attributes_ls'     : attributes_ls,
+                'attributes_rs'     : attributes_rs,
+                'u_init_ls'         : u_init_ls,
+                'u_init_rs'         : u_init_rs,
+                'labels'            : labels,
+                'test_neighbors_ls' : test_neighbors_ls,
+                'test_neighbors_rs' : test_neighbors_rs,
+                'test_attributes_ls': test_attributes_ls,
+                'test_attributes_rs': test_attributes_rs,
+                'test_u_init_ls'    : test_u_init_ls,
+                'test_u_init_rs'    : test_u_init_rs,
+                'test_labels'       : test_labels,
+            }
+            with open(args.PackedData, 'wb') as f:
+                pickle.dump(packed_data, f)
+        if len(samples) != len(neighbors_ls):
+            print('The packed data does not have the same size as learning data. Please check the two files are correct.')
+            sys.exit(-7)
 
     init_op = tf.global_variables_initializer()
 
@@ -452,17 +455,6 @@ def main(argv):
                 loss_sum = 0
                 cur_step = 0
                 correct = 0
-                if cur_epoch != 0:
-                    train_acc = sess.run(accuracy, {
-                        neighbors_left: neighbors_ls[:1000], attributes_left: attributes_ls[:1000], u_init_left: u_init_ls[:1000],
-                        neighbors_right: neighbors_rs[:1000], attributes_right: attributes_rs[:1000], u_init_right: u_init_rs[:1000],
-                        label: labels[:1000]
-                    })
-                    test_acc = sess.run(accuracy, {
-                        neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
-                        neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
-                        label: test_labels
-                    })
                 if args.Debug:
                     idx = 0
                     for neighbors_l, neighbors_r, attributes_l, attributes_r, u_init_l, u_init_r, ground_truth in zip(neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs, labels):
@@ -483,9 +475,9 @@ def main(argv):
                                 }, args.DebugMatsDir, samples[idx], pattern)
                         idx += 1
 
-
                 # samples, labels = learning_data['train']['sample'], learning_data['train']['label']
 
+                num_train_correct = 0
                 while cur_step < len(samples):
                     if len(samples) - cur_step > args.BatchSize:
                         cur_neighbors_ls  = neighbors_ls [cur_step: cur_step + args.BatchSize]
@@ -503,13 +495,13 @@ def main(argv):
                         cur_u_init_ls     = u_init_ls    [cur_step:]
                         cur_u_init_rs     = u_init_rs    [cur_step:]
                         cur_labels        = labels       [cur_step:]
-
-                    _, loss = sess.run([train_op, loss_op], {
+                    _, loss, batch_acc = sess.run([train_op, loss_op, accuracy], {
                         neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
                         neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
                         label: cur_labels
                     })
                     cur_step += len(cur_neighbors_ls)
+                    num_train_correct += batch_acc * len(cur_neighbors_ls)
                     
                     sys.stdout.write('Epoch: {:10}, BatchLoss: {:15.10f}, Step: {:10}, TrainAcc: {:6.10f}, TestAcc: {:6.10f}    \r'.format(cur_epoch, loss, cur_step, train_acc, test_acc))
                     sys.stdout.flush()
@@ -523,11 +515,17 @@ def main(argv):
 
                     total_step += len(cur_neighbors_ls)
                     loss_sum += loss
+                train_acc = num_train_correct / len(samples)
+                test_acc = sess.run(accuracy, {
+                    neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
+                    neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
+                    label: test_labels
+                })
+                epoch_loss = (loss_sum / math.ceil(len(samples) / args.BatchSize))
+                cur_epoch += 1
                 sys.stdout.write('Epoch: {:10}, EpochLoss: {:15.10f}, Step: {:10}, TrainAcc: {:6.10f}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, train_acc, test_acc))
                 sys.stdout.flush()
                 print()
-                epoch_loss = (loss_sum / math.ceil(len(samples) / args.BatchSize))
-                cur_epoch += 1
                 if args.UpdateModel:
                     saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=total_step)
             print('Training finished. [{}]'.format(str(datetime.now())))
