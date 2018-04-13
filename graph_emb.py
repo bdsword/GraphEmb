@@ -512,6 +512,12 @@ def main(argv):
                         neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
                         label: cur_labels
                     })
+                    pos_acc_summary = tf.Summary()
+                    pos_acc_summary.value.add(tag='PositiveAccuracy', simple_value=positive_acc)
+                    neg_acc_summary = tf.Summary()
+                    neg_acc_summary.value.add(tag='NegativeAccuracy', simple_value=negative_acc)
+                    train_writer.add_summary(pos_acc_summary, total_step)
+                    train_writer.add_summary(neg_acc_summary, total_step)
                     train_writer.add_summary(summary, total_step)
 
                     total_step = int(sess.run(global_step))
