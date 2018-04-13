@@ -309,6 +309,11 @@ def main(argv):
                         tf.reduce_sum(tf.cast(tf.equal(tf.cast(tf.less(cos_similarity, cos_45), tf.float32), tf.negative(label)), tf.float32))) \
                         / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
 
+            positive_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - cos_45), tf.where(tf.equal(label, 1))), 1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, 1)))[0], tf.float32)
+            positive_num = tf.shape(tf.where(tf.equal(label, 1)))[0]
+            negative_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - cos_45), tf.where(tf.equal(label, -1))), -1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, -1)))[0], tf.float32)
+            negative_num = tf.shape(tf.where(tf.equal(label, -1)))[0]
+
             # This is vic's loss function
             # loss_op = (1 + label) * (-0.5 + tf.sigmoid(tf.reduce_mean(tf.squared_difference(graph_emb_left, graph_emb_right)))) + (1 - label) * tf.square(1 + cos_similarity)
             tf.summary.scalar('accuracy', accuracy)
@@ -475,6 +480,10 @@ def main(argv):
                 # samples, labels = learning_data['train']['sample'], learning_data['train']['label']
 
                 num_train_correct = 0
+                num_train_pos_correct = 0
+                num_train_pos = 0
+                num_train_neg_correct = 0
+                num_train_neg = 0
                 for cur_step in range(num_step_per_epoch):
                     cur_neighbors_ls  = neighbors_ls [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
                     cur_neighbors_rs  = neighbors_rs [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
@@ -484,14 +493,18 @@ def main(argv):
                     cur_u_init_rs     = u_init_rs    [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
                     cur_labels        = labels       [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
 
-                    _, loss, batch_acc = sess.run([train_op, loss_op, accuracy], {
+                    _, loss, batch_acc, positive_acc, pos_num, negative_acc, neg_num = sess.run([train_op, loss_op, accuracy, positive_accuracy, positive_num, negative_accuracy, negative_num], {
                         neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
                         neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
                         label: cur_labels
                     })
                     num_train_correct += batch_acc * len(cur_neighbors_ls)
+                    num_train_pos_correct += positive_acc * pos_num
+                    num_train_pos += pos_num
+                    num_train_neg_correct += negative_acc * neg_num
+                    num_train_neg += neg_num
                     
-                    sys.stdout.write('Epoch: {:10}, BatchLoss: {:15.10f}, BatchStep: {:10}, TotalStep: {:10}, TrainAcc: {:6.10f}, TestAcc: {:6.10f}    \r'.format(cur_epoch, loss, cur_step, total_step, train_acc, test_acc))
+                    sys.stdout.write('Epoch: {:4}, BatchLoss: {:8.7f}, BatchStep: {:4}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f},TestAcc: {:.4f}  \r'.format(cur_epoch, loss, cur_step, total_step, train_acc, positive_acc, negative_acc, test_acc))
                     sys.stdout.flush()
 
                     summary = sess.run(merged, {
@@ -511,7 +524,7 @@ def main(argv):
                 })
                 epoch_loss = (loss_sum / math.ceil(len(samples) / args.BatchSize))
                 cur_epoch += 1
-                sys.stdout.write('Epoch: {:10}, EpochLoss: {:15.10f}, BatchStep: {:10}, TotalStep: {:10}, TrainAcc: {:6.10f}, TestAcc: {:6.10f}    \r'.format(cur_epoch, epoch_loss, cur_step, total_step, train_acc, test_acc))
+                sys.stdout.write('Epoch: {:4}, EpochLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f}, TestAcc: {:.4f}                 \r'.format(cur_epoch, epoch_loss, total_step, train_acc, num_train_pos_correct / num_train_pos, num_train_neg_correct / num_train_neg, test_acc))
                 sys.stdout.flush()
                 print()
                 if args.UpdateModel:
