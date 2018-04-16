@@ -406,20 +406,20 @@ def main(argv):
             print('The packed data does not have the same size as learning data. Please check the two files are correct.')
             sys.exit(-7)
 
-    init_op = tf.global_variables_initializer()
-
-    saver = tf.train.Saver()
 
     print('Starting the tensorflow session...... [{}]'.format(str(datetime.now())))
     with tf.Session() as sess:
         train_writer = tf.summary.FileWriter(os.path.join(args.LOG_DIR, 'train'), sess.graph)
+        saver = tf.train.Saver()
 
-        sess.run(init_op)
-        
         if args.LoadModel:
             print('Loading the stored model...... [{}]'.format(str(datetime.now())))
             states = tf.train.get_checkpoint_state(args.MODEL_DIR)
             saver.restore(sess, states.model_checkpoint_path)
+        else:
+            init_op = tf.global_variables_initializer()
+            sess.run(init_op)
+
         if args.StartIPython:
             _start_shell(locals(), globals())
         elif args.TSNE_Mode:
@@ -536,6 +536,7 @@ def main(argv):
                 print()
                 if args.UpdateModel:
                     saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=global_step)
+
             print('Training finished. [{}]'.format(str(datetime.now())))
 
 
