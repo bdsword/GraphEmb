@@ -316,15 +316,18 @@ def main(argv):
 
             # This is vic's loss function
             # loss_op = (1 + label) * (-0.5 + tf.sigmoid(tf.reduce_mean(tf.squared_difference(graph_emb_left, graph_emb_right)))) + (1 - label) * tf.square(1 + cos_similarity)
-            tf.summary.scalar('accuracy', accuracy)
-            tf.summary.scalar('loss', loss_op)
-            tf.summary.scalar('global_step', global_step)
-            merged = tf.summary.merge_all()
-
             # Operations for debug
             debug_ops = {'W1': W1, 'W2': W2, 'P_n': P_n, 'u_left': u_left, 'u_right': u_right,
                          'W1_mul_X_left': W1_mul_X_left, 'W1_mul_X_right': W1_mul_X_right,
                          'sigma_output_left': sigma_output_left, 'sigma_output_right': sigma_output_right}
+
+        with tf.name_scope('Accuracy'):
+            tf.summary.scalar('accuracy', accuracy)
+            tf.summary.scalar('positive_accuracy', positive_accuracy)
+            tf.summary.scalar('negative_accuracy', negative_accuracy)
+        with tf.name_scope('Cost'):
+            tf.summary.scalar('loss', loss_op)
+        merged = tf.summary.merge_all()
 
         train_op = tf.train.AdamOptimizer(args.LearningRate).minimize(loss_op, global_step=global_step)
     else: 
@@ -512,12 +515,6 @@ def main(argv):
                         neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
                         label: cur_labels
                     })
-                    pos_acc_summary = tf.Summary()
-                    pos_acc_summary.value.add(tag='PositiveAccuracy', simple_value=positive_acc)
-                    neg_acc_summary = tf.Summary()
-                    neg_acc_summary.value.add(tag='NegativeAccuracy', simple_value=negative_acc)
-                    train_writer.add_summary(pos_acc_summary, total_step)
-                    train_writer.add_summary(neg_acc_summary, total_step)
                     train_writer.add_summary(summary, total_step)
 
                     total_step = int(sess.run(global_step))
@@ -528,6 +525,10 @@ def main(argv):
                     neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
                     label: test_labels
                 })
+                test_acc_summary = tf.Summary()
+                test_acc_summary.value.add(tag='Accuracy/test_accuracy', simple_value=test_acc)
+                train_writer.add_summary(test_acc_summary, total_step)
+
                 epoch_loss = (loss_sum / math.ceil(len(samples) / args.BatchSize))
                 cur_epoch += 1
                 sys.stdout.write('Epoch: {:4}, EpochLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f}, TestAcc: {:.4f}                 \r'.format(cur_epoch, epoch_loss, total_step, train_acc, num_train_pos_correct / num_train_pos, num_train_neg_correct / num_train_neg, test_acc))
