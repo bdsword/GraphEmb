@@ -78,7 +78,7 @@ def main(argv):
                         cur.execute('SELECT * FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}" and function_name is "{}"'.format(TABLE_NAME, contest, author, question, arch_pair[1], func))
                         row = cur.fetchone()
                         graph_right = load_graph(row[1])
-                        data_pattern_right = '{}#{}#{}#{}#{}'.format(contest, author, question, arch_pair[1], func)
+                        data_pattern_right = '{}:{}:{}:{}:{}'.format(contest, author, question, arch_pair[1], func)
 
                         if args.AcceptMinNodeNum and (len(graph_left) < args.AcceptMinNodeNum or len(graph_right) < args.AcceptMinNodeNum):
                             continue
