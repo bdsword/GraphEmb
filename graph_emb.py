@@ -272,72 +272,69 @@ def main(argv):
         attr_avg_std_map = normalize_data(learning_data['train']['sample'])
 
     print('Building model graph...... [{}]'.format(str(datetime.now())))
-    if not args.StartIPython and not args.TSNE_Mode:
-        with tf.device('/cpu:0'):
-            global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
-        with tf.variable_scope("siamese") as scope:
-            # Build Training Graph
-            neighbors_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum)) # B x N x N
-            attributes_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim)) # B x N x d
-            u_init_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize)) # B x N x p
-            graph_emb_left, W1, W2, P_n, u_left, W1_mul_X_left, sigma_output_left = build_emb_graph(neighbors_left, attributes_left, u_init_left, # N x p
+    with tf.device('/cpu:0'):
+        global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
+    with tf.variable_scope("siamese") as scope:
+        # Build Training Graph
+        neighbors_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum)) # B x N x N
+        attributes_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim)) # B x N x d
+        u_init_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize)) # B x N x p
+        graph_emb_left, W1, W2, P_n, u_left, W1_mul_X_left, sigma_output_left = build_emb_graph(neighbors_left, attributes_left, u_init_left, # N x p
+                                                                                                attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
+
+        scope.reuse_variables()
+
+        neighbors_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum)) #B x N x N
+        attributes_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim)) # B x N x d
+        u_init_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize)) # B x N x p
+        graph_emb_right, W1, W2, P_n, u_right, W1_mul_X_right, sigma_output_right = build_emb_graph(neighbors_right, attributes_right, u_init_right, # N x p
                                                                                                     attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
 
-            scope.reuse_variables()
+        label = tf.placeholder(tf.float32, shape=(None, ))
 
-            neighbors_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum)) #B x N x N
-            attributes_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim)) # B x N x d
-            u_init_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize)) # B x N x p
-            graph_emb_right, W1, W2, P_n, u_right, W1_mul_X_right, sigma_output_right = build_emb_graph(neighbors_right, attributes_right, u_init_right, # N x p
-                                                                                                        attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
+        norm_emb_left = tf.nn.l2_normalize(graph_emb_left, 1)
+        norm_emb_right = tf.nn.l2_normalize(graph_emb_right, 1)
+        cos_similarity = tf.reduce_sum(tf.multiply(norm_emb_left, norm_emb_right), 1)
+        # loss_op = tf.reduce_mean(tf.square(cos_similarity - label))
 
-            label = tf.placeholder(tf.float32, shape=(None, ))
+        rad = cos_similarity
+        loss_p = (1+label)*tf.cast(tf.less(rad, 0.7),tf.float32)*(1+0.7-rad) # > 45 degree, loss is the degree
+        loss_n = (1-label)*tf.cast(tf.greater(rad, 0.7),tf.float32)*(1+rad-0.7) # < 45 degree, loss is 45-degree
+        loss_op = tf.reduce_mean( tf.square(loss_p + loss_n) )
 
-            norm_emb_left = tf.nn.l2_normalize(graph_emb_left, 1)
-            norm_emb_right = tf.nn.l2_normalize(graph_emb_right, 1)
-            cos_similarity = tf.reduce_sum(tf.multiply(norm_emb_left, norm_emb_right), 1)
-            # loss_op = tf.reduce_mean(tf.square(cos_similarity - label))
+        # accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.sign(cos_similarity), label), tf.float32)) / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
+        cos_45 = np.cos(np.pi/4) # 1/sqrt(2)
+        accuracy = tf.add( tf.reduce_sum(tf.cast(tf.equal(tf.cast(tf.greater(cos_similarity, cos_45), tf.float32), label), tf.float32)),\
+                    tf.reduce_sum(tf.cast(tf.equal(tf.cast(tf.less(cos_similarity, cos_45), tf.float32), tf.negative(label)), tf.float32))) \
+                    / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
 
-            rad = cos_similarity
-            loss_p = (1+label)*tf.cast(tf.less(rad, 0.7),tf.float32)*(1+0.7-rad) # > 45 degree, loss is the degree
-            loss_n = (1-label)*tf.cast(tf.greater(rad, 0.7),tf.float32)*(1+rad-0.7) # < 45 degree, loss is 45-degree
-            loss_op = tf.reduce_mean( tf.square(loss_p + loss_n) )
+        positive_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - cos_45), tf.where(tf.equal(label, 1))), 1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, 1)))[0], tf.float32)
+        positive_num = tf.shape(tf.where(tf.equal(label, 1)))[0]
+        negative_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - cos_45), tf.where(tf.equal(label, -1))), -1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, -1)))[0], tf.float32)
+        negative_num = tf.shape(tf.where(tf.equal(label, -1)))[0]
 
-            # accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.sign(cos_similarity), label), tf.float32)) / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
-            cos_45 = np.cos(np.pi/4) # 1/sqrt(2)
-            accuracy = tf.add( tf.reduce_sum(tf.cast(tf.equal(tf.cast(tf.greater(cos_similarity, cos_45), tf.float32), label), tf.float32)),\
-                        tf.reduce_sum(tf.cast(tf.equal(tf.cast(tf.less(cos_similarity, cos_45), tf.float32), tf.negative(label)), tf.float32))) \
-                        / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
+        # Bulid Inference Graph
+        neighbors_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum))
+        attributes_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim))
+        u_init_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize))
+        graph_emb_inference, W1_inference, W2_inference, P_n_inference, u_v_inference, W1_mul_X_inference, sigma_output_inference = build_emb_graph(neighbors_test, attributes_test, u_init_test, attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
 
-            positive_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - cos_45), tf.where(tf.equal(label, 1))), 1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, 1)))[0], tf.float32)
-            positive_num = tf.shape(tf.where(tf.equal(label, 1)))[0]
-            negative_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - cos_45), tf.where(tf.equal(label, -1))), -1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, -1)))[0], tf.float32)
-            negative_num = tf.shape(tf.where(tf.equal(label, -1)))[0]
+        # This is vic's loss function
+        # loss_op = (1 + label) * (-0.5 + tf.sigmoid(tf.reduce_mean(tf.squared_difference(graph_emb_left, graph_emb_right)))) + (1 - label) * tf.square(1 + cos_similarity)
+        # Operations for debug
+        debug_ops = {'W1': W1, 'W2': W2, 'P_n': P_n, 'u_left': u_left, 'u_right': u_right,
+                     'W1_mul_X_left': W1_mul_X_left, 'W1_mul_X_right': W1_mul_X_right,
+                     'sigma_output_left': sigma_output_left, 'sigma_output_right': sigma_output_right}
 
-            # This is vic's loss function
-            # loss_op = (1 + label) * (-0.5 + tf.sigmoid(tf.reduce_mean(tf.squared_difference(graph_emb_left, graph_emb_right)))) + (1 - label) * tf.square(1 + cos_similarity)
-            # Operations for debug
-            debug_ops = {'W1': W1, 'W2': W2, 'P_n': P_n, 'u_left': u_left, 'u_right': u_right,
-                         'W1_mul_X_left': W1_mul_X_left, 'W1_mul_X_right': W1_mul_X_right,
-                         'sigma_output_left': sigma_output_left, 'sigma_output_right': sigma_output_right}
+    with tf.name_scope('Accuracy'):
+        tf.summary.scalar('accuracy', accuracy)
+        tf.summary.scalar('positive_accuracy', positive_accuracy)
+        tf.summary.scalar('negative_accuracy', negative_accuracy)
+    with tf.name_scope('Cost'):
+        tf.summary.scalar('loss', loss_op)
+    merged = tf.summary.merge_all()
 
-        with tf.name_scope('Accuracy'):
-            tf.summary.scalar('accuracy', accuracy)
-            tf.summary.scalar('positive_accuracy', positive_accuracy)
-            tf.summary.scalar('negative_accuracy', negative_accuracy)
-        with tf.name_scope('Cost'):
-            tf.summary.scalar('loss', loss_op)
-        merged = tf.summary.merge_all()
-
-        train_op = tf.train.AdamOptimizer(args.LearningRate).minimize(loss_op, global_step=global_step)
-    else: 
-        with tf.variable_scope("siamese") as scope:
-            # Bulid Inference Graph
-            neighbors_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum))
-            attributes_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim))
-            u_init_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize))
-            graph_emb, W1, W2, P_n, u_v, W1_mul_X, sigma_output = build_emb_graph(neighbors_test, attributes_test, u_init_test,
-                                                                                  attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
+    train_op = tf.train.AdamOptimizer(args.LearningRate).minimize(loss_op, global_step=global_step)
     
     print('Preparing the data for the model...... [{}]'.format(str(datetime.now())))
     if args.TSNE_Mode:
@@ -430,7 +427,7 @@ def main(argv):
                 cur_neighbors  = tsne_neighbors [count: count + args.BatchSize]
                 cur_attributes = tsne_attributes[count: count + args.BatchSize]
                 cur_u_inits    = tsne_u_inits   [count: count + args.BatchSize]
-                embs += sess.run(graph_emb, {neighbors_test: cur_neighbors, attributes_test: cur_attributes, u_init_test: cur_u_inits}).tolist()
+                embs += sess.run(graph_emb_inference, {neighbors_test: cur_neighbors, attributes_test: cur_attributes, u_init_test: cur_u_inits}).tolist()
                 count += len(cur_neighbors)
             tsne_data['samples'] = embs
             emb_plk_path = os.path.join(args.LOG_DIR, 'embeddings.plk')
