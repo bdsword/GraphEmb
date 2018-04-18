@@ -138,9 +138,9 @@ def main(argv):
 
         if args.AcceptMinNodeNum and (len(graph_left) < args.AcceptMinNodeNum or len(graph_right) < args.AcceptMinNodeNum):
             continue
-
-        data_pattern_left = '{}:{}:{}:{}:{}'.format(row_pair[0][6], row_pair[0][5], row_pair[0][4], row_pair[0][2], row_pair[0][5])
-        data_pattern_right = '{}:{}:{}:{}:{}'.format(row_pair[1][6], row_pair[1][5], row_pair[1][4], row_pair[1][2], row_pair[1][5])
+        # binary_path, question, acfg_path, arch, function_name, author, contest
+        data_pattern_left = '{}:{}:{}:{}:{}'.format(row_pair[0][6], row_pair[0][5], row_pair[0][1], row_pair[0][3], row_pair[0][4])
+        data_pattern_right = '{}:{}:{}:{}:{}'.format(row_pair[1][6], row_pair[1][5], row_pair[1][1], row_pair[1][3], row_pair[1][4])
         # Check the pattern have not been used
         if '{}_{}'.format(data_pattern_left, data_pattern_right) not in used_patterns and '{}_{}'.format(data_pattern_left, data_pattern_right) not in used_patterns:
             negative_pool.append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}]) 
