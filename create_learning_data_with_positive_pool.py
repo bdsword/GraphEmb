@@ -18,6 +18,13 @@ def load_graph(graph_path):
     return graph
 
 
+def dict_factory(cursor, row):
+    d = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description='Slice the whole dataset according to the sqlite fileinto train and test data.')
     parser.add_argument('SQLiteDB', help='Path to the sqlite db file contains information about ACFGs.')
@@ -33,10 +40,11 @@ def main(argv):
     TABLE_NAME = 'flow_graph_acfg'
 
     conn = sqlite3.connect(args.SQLiteDB)
+    conn.row_factory = dict_factory
     cur = conn.cursor()
 
     cur.execute('SELECT DISTINCT contest FROM {}'.format(TABLE_NAME))
-    available_contests = [c[0] for c in cur.fetchall()]
+    available_contests = [c['contest'] for c in cur.fetchall()]
 
     num_positive = int(input('How many positive pair would you like to generate: '))
     num_negative = int(input('How many negative pair would you like to generate: '))
@@ -66,20 +74,20 @@ def main(argv):
     while count < num_negative:
         picked_row_ids = random.sample(range(0, len(all_rows)), 2)
         row_pair = [all_rows[picked_row_ids[0]], all_rows[picked_row_ids[1]]]
-        if row_pair[0][3] == row_pair[1][3]:
+        if row_pair[0]['function_name'] == row_pair[1]['function_name']:
             continue
-        if row_pair[0][2] not in args.Archs or row_pair[1][2] not in args.Archs:
+        if row_pair[0]['arch'] not in args.Archs or row_pair[1]['arch'] not in args.Archs:
             continue
-        graph_left = load_graph(row_pair[0][1])
-        graph_right = load_graph(row_pair[1][1])
+        graph_left = load_graph(row_pair[0]['acfg_path'])
+        graph_right = load_graph(row_pair[1]['acfg_path'])
 
         if args.AcceptMinNodeNum and (len(graph_left) < args.AcceptMinNodeNum or len(graph_right) < args.AcceptMinNodeNum):
             continue
         if args.AcceptMaxNodeNum and (len(graph_left) > args.AcceptMaxNodeNum or len(graph_right) > args.AcceptMaxNodeNum):
             continue
 
-        data_pattern_left = '{}:{}:{}:{}:{}'.format(row_pair[0][6], row_pair[0][5], row_pair[0][1], row_pair[0][3], row_pair[0][4])
-        data_pattern_right = '{}:{}:{}:{}:{}'.format(row_pair[1][6], row_pair[1][5], row_pair[1][1], row_pair[1][3], row_pair[1][4])
+        data_pattern_left  = '{}:{}:{}:{}:{}'.format(row_pair[0]['contest'], row_pair[0]['author'], row_pair[0]['question'], row_pair[0]['arch'], row_pair[0]['function_name'])
+        data_pattern_right = '{}:{}:{}:{}:{}'.format(row_pair[1]['contest'], row_pair[1]['author'], row_pair[1]['question'], row_pair[1]['arch'], row_pair[1]['function_name'])
         # Check the pattern have not been used
         if '{}_{}'.format(data_pattern_left, data_pattern_right) not in used_patterns and '{}_{}'.format(data_pattern_left, data_pattern_right) not in used_patterns:
             negative_pool.append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}])

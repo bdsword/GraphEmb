@@ -16,6 +16,13 @@ def load_graph(graph_path):
     return graph
 
 
+def dict_factory(cursor, row):
+    d = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description='Slice the whole dataset according to the sqlite fileinto train and test data.')
     parser.add_argument('SQLiteDB', help='Path to the sqlite db file contains information about ACFGs.')
@@ -29,10 +36,11 @@ def main(argv):
     TABLE_NAME = 'flow_graph_acfg'
 
     conn = sqlite3.connect(args.SQLiteDB)
+    conn.row_factory = dict_factory
     cur = conn.cursor()
 
     cur.execute('SELECT DISTINCT contest FROM {}'.format(TABLE_NAME))
-    available_contests = [c[0] for c in cur.fetchall()]
+    available_contests = [c['contest'] for c in cur.fetchall()]
 
     positive_pool = []
 
@@ -42,21 +50,21 @@ def main(argv):
     count = 0
     for contest in available_contests:
         cur.execute('SELECT DISTINCT author FROM {} WHERE contest is "{}"'.format(TABLE_NAME, contest))
-        available_authors = [a[0] for a in cur.fetchall()]
+        available_authors = [a['author'] for a in cur.fetchall()]
         for author in available_authors:
             cur.execute('SELECT DISTINCT question FROM {} WHERE contest is "{}" and author is "{}"'.format(TABLE_NAME, contest, author))
-            available_questions = [q[0] for q in cur.fetchall()]
+            available_questions = [q['question'] for q in cur.fetchall()]
             for question in available_questions:
                 cur.execute('SELECT DISTINCT arch FROM {} WHERE contest is "{}" and author is "{}" and question is "{}"'.format(TABLE_NAME, contest, author, question))
-                available_archs = [a[0] for a in cur.fetchall()]
+                available_archs = [a['arch'] for a in cur.fetchall()]
                 available_archs = list(set(available_archs) - (set(archs) - set(args.Archs)))
                 if len(available_archs) < 2:
                     continue
                 for arch_pair in itertools.combinations(available_archs, 2):
                     cur.execute('SELECT DISTINCT function_name FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}"'.format(TABLE_NAME, contest, author, question, arch_pair[0]))
-                    available_funcs_left = [f[0] for f in cur.fetchall()]
+                    available_funcs_left = [f['function_name'] for f in cur.fetchall()]
                     cur.execute('SELECT DISTINCT function_name FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}"'.format(TABLE_NAME, contest, author, question, arch_pair[1]))
-                    available_funcs_right = [f[0] for f in cur.fetchall()]
+                    available_funcs_right = [f['function_name'] for f in cur.fetchall()]
                     both_contain_fucs = list(set(available_funcs_left) & set(available_funcs_right))
                     if len(both_contain_fucs) <= 0:
                         continue
@@ -72,12 +80,12 @@ def main(argv):
                         # Select the first record
                         cur.execute('SELECT * FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}" and function_name is "{}"'.format(TABLE_NAME, contest, author, question, arch_pair[0], func))
                         row = cur.fetchone()
-                        graph_left = load_graph(row[1])
+                        graph_left = load_graph(row['acfg_path'])
                         data_pattern_left = '{}:{}:{}:{}:{}'.format(contest, author, question, arch_pair[0], func)
                         # Select the second record
                         cur.execute('SELECT * FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}" and function_name is "{}"'.format(TABLE_NAME, contest, author, question, arch_pair[1], func))
                         row = cur.fetchone()
-                        graph_right = load_graph(row[1])
+                        graph_right = load_graph(row['acfg_path'])
                         data_pattern_right = '{}:{}:{}:{}:{}'.format(contest, author, question, arch_pair[1], func)
 
                         if args.AcceptMinNodeNum and (len(graph_left) < args.AcceptMinNodeNum or len(graph_right) < args.AcceptMinNodeNum):

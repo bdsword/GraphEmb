@@ -17,6 +17,13 @@ def load_graph(graph_path):
     return graph
 
 
+def dict_factory(cursor, row):
+    d = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description='Slice the whole dataset according to the sqlite fileinto train and test data.')
     parser.add_argument('SQLiteDB', help='Path to the sqlite db file contains information about ACFGs.')
@@ -29,6 +36,7 @@ def main(argv):
     TABLE_NAME = 'flow_graph_acfg'
 
     conn = sqlite3.connect(args.SQLiteDB)
+    conn.row_factory = dict_factory
     cur = conn.cursor()
 
     cur.execute('SELECT DISTINCT contest FROM {}'.format(TABLE_NAME))
@@ -53,17 +61,17 @@ def main(argv):
 
         # Random pick one author
         cur.execute('SELECT DISTINCT author FROM {} WHERE contest is "{}"'.format(TABLE_NAME, picked_contest))
-        available_authors = [a[0] for a in cur.fetchall()]
+        available_authors = [a['author'] for a in cur.fetchall()]
         picked_author = available_authors[random.randrange(0, len(available_authors))]
 
         # Random pick one question
         cur.execute('SELECT DISTINCT question FROM {} WHERE contest is "{}" and author is "{}"'.format(TABLE_NAME, picked_contest, picked_author))
-        available_questions = [q[0] for q in cur.fetchall()]
+        available_questions = [q['question'] for q in cur.fetchall()]
         picked_question = available_questions[random.randrange(0, len(available_questions))]
 
         # Random pick two architecture
         cur.execute('SELECT DISTINCT arch FROM {} WHERE contest is "{}" and author is "{}" and question is "{}"'.format(TABLE_NAME, picked_contest, picked_author, picked_question))
-        available_archs = [a[0] for a in cur.fetchall()]
+        available_archs = [a['arch'] for a in cur.fetchall()]
         available_archs = list(set(available_archs) - (set(archs) - set(args.Archs)))
         picked_arch_ids = random.sample(range(0, len(available_archs)), 2)
         picked_arch_1 = available_archs[picked_arch_ids[0]]
@@ -71,9 +79,9 @@ def main(argv):
 
         # Random pick one function
         cur.execute('SELECT DISTINCT function_name FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}"'.format(TABLE_NAME, picked_contest, picked_author, picked_question, picked_arch_1))
-        available_funcs_left = [f[0] for f in cur.fetchall()]
+        available_funcs_left = [f['function_name'] for f in cur.fetchall()]
         cur.execute('SELECT DISTINCT function_name FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}"'.format(TABLE_NAME, picked_contest, picked_author, picked_question, picked_arch_2))
-        available_funcs_right = [f[0] for f in cur.fetchall()]
+        available_funcs_right = [f['function_name'] for f in cur.fetchall()]
         both_contain_fucs = list(set(available_funcs_left) & set(available_funcs_right))
         if len(both_contain_fucs) <= 0:
             continue
@@ -82,13 +90,13 @@ def main(argv):
         # Select the first record
         cur.execute('SELECT * FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}" and function_name is "{}"'.format(TABLE_NAME, picked_contest, picked_author, picked_question, picked_arch_1, picked_func))
         row = cur.fetchone()
-        graph_left = load_graph(row[1])
+        graph_left = load_graph(row['acfg_path'])
         data_pattern_left = '{}:{}:{}:{}:{}'.format(picked_contest, picked_author, picked_question, picked_arch_1, picked_func)
 
         # Select the second record
         cur.execute('SELECT * FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}" and function_name is "{}"'.format(TABLE_NAME, picked_contest, picked_author, picked_question, picked_arch_2, picked_func))
         row = cur.fetchone()
-        graph_right = load_graph(row[1])
+        graph_right = load_graph(row['acfg_path'])
         data_pattern_right = '{}:{}:{}:{}:{}'.format(picked_contest, picked_author, picked_question, picked_arch_2, picked_func)
 
         if args.AcceptMinNodeNum and (len(graph_left) < args.AcceptMinNodeNum or len(graph_right) < args.AcceptMinNodeNum):
@@ -112,18 +120,18 @@ def main(argv):
     while count < num_negative:
         picked_row_ids = random.sample(range(0, len(all_rows)), 2)
         row_pair = [all_rows[picked_row_ids[0]], all_rows[picked_row_ids[1]]]
-        if row_pair[0][3] == row_pair[1][3]:
+        if row_pair[0]['function_name'] == row_pair[1]['function_name']:
             continue
-        if row_pair[0][2] not in args.Archs or row_pair[1][2] not in args.Archs:
+        if row_pair[0]['arch'] not in args.Archs or row_pair[1]['arch'] not in args.Archs:
             continue
-        graph_left = load_graph(row_pair[0][1])
-        graph_right = load_graph(row_pair[1][1])
+        graph_left = load_graph(row_pair[0]['acfg_path'])
+        graph_right = load_graph(row_pair[1]['acfg_path'])
 
         if args.AcceptMinNodeNum and (len(graph_left) < args.AcceptMinNodeNum or len(graph_right) < args.AcceptMinNodeNum):
             continue
 
-        data_pattern_left = '{}:{}:{}:{}:{}'.format(row_pair[0][6], row_pair[0][5], row_pair[0][4], row_pair[0][2], row_pair[0][5])
-        data_pattern_right = '{}:{}:{}:{}:{}'.format(row_pair[1][6], row_pair[1][5], row_pair[1][4], row_pair[1][2], row_pair[1][5])
+        data_pattern_left  = '{}:{}:{}:{}:{}'.format(row_pair[0]['contest'], row_pair[0]['author'], row_pair[0]['question'], row_pair[0]['arch'], row_pair[0]['function_name'])
+        data_pattern_right = '{}:{}:{}:{}:{}'.format(row_pair[1]['contest'], row_pair[1]['author'], row_pair[1]['question'], row_pair[1]['arch'], row_pair[1]['function_name'])
         # Check the pattern have not been used
         if '{}_{}'.format(data_pattern_left, data_pattern_right) not in used_pattern and '{}_{}'.format(data_pattern_right, data_pattern_left) not in used_pattern:
             negative_pool.append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}]) 
