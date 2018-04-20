@@ -232,6 +232,7 @@ def main(argv):
     parser.add_argument('--LearningRate', type=float, default=0.0001, help='The learning rate for the model.')
     parser.add_argument('--T', type=int, default=5, help='The T parameter in the model.(How many hops to propagate information to.)')
     parser.add_argument('--MaxNodeNum', type=int, default=200, help='The max number of nodes per ACFG.')
+    parser.add_argument('--Epochs', type=int, default=1000, help='The number of epochs to run.')
     parser.add_argument('--NumberOfRelu', type=int, default=2, help='The number of relu layer in the sigma function.')
     parser.add_argument('--EmbeddingSize', type=int, default=64, help='The dimension of the embedding vectors.')
     parser.add_argument('--DebugMatsDir', help='The dimension of the embedding vectors.')
@@ -444,7 +445,6 @@ def main(argv):
             print('Generate embedding vectors successfully. To view the visualization, please run:\n$ ./create_tsne_projector.py {} {} YOUR_EMBEDDING_LOG_DIR'.format(emb_plk_path, metadata_path))
         else:
             print('Start in training mode. [{}]'.format(str(datetime.now())))
-            num_epoch = 1000
             num_step_per_epoch = int(math.ceil(len(samples) / args.BatchSize))
             epoch_loss = float('Inf')
             total_step = int(sess.run(global_step))
@@ -453,7 +453,7 @@ def main(argv):
 
             num_positive = 0
             print('\tStart training epoch...... [{}]'.format(str(datetime.now())))
-            for cur_epoch in range(num_epoch):
+            for cur_epoch in range(args.Epochs):
                 loss_sum = 0
                 cur_step = 0
                 correct = 0
