@@ -319,6 +319,7 @@ def main(argv):
         attributes_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim))
         u_init_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize))
         graph_emb_inference, W1_inference, W2_inference, P_n_inference, u_v_inference, W1_mul_X_inference, sigma_output_inference = build_emb_graph(neighbors_test, attributes_test, u_init_test, attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
+        norm_graph_emb_inference = tf.nn.l2_normalize(graph_emb_inference, 1)
 
         # This is vic's loss function
         # loss_op = (1 + label) * (-0.5 + tf.sigmoid(tf.reduce_mean(tf.squared_difference(graph_emb_left, graph_emb_right)))) + (1 - label) * tf.square(1 + cos_similarity)
@@ -428,7 +429,7 @@ def main(argv):
                 cur_neighbors  = tsne_neighbors [count: count + args.BatchSize]
                 cur_attributes = tsne_attributes[count: count + args.BatchSize]
                 cur_u_inits    = tsne_u_inits   [count: count + args.BatchSize]
-                embs += sess.run(graph_emb_inference, {neighbors_test: cur_neighbors, attributes_test: cur_attributes, u_init_test: cur_u_inits}).tolist()
+                embs += sess.run(norm_graph_emb_inference, {neighbors_test: cur_neighbors, attributes_test: cur_attributes, u_init_test: cur_u_inits}).tolist()
                 count += len(cur_neighbors)
             tsne_data['samples'] = embs
             emb_plk_path = os.path.join(args.LOG_DIR, 'embeddings.plk')
