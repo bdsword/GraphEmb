@@ -15,6 +15,7 @@ import argparse
 import subprocess
 import progressbar
 from datetime import datetime
+import glob
 
 
 def get_number_of_attribute():
@@ -174,31 +175,6 @@ def write_debug_mats(sess, ops, feed_dict, root_dir, sample_pair, information):
     return
 
 
-def convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim):
-    neighbors_ls = []
-    neighbors_rs = []
-    attributes_ls = []
-    attributes_rs = []
-    u_init_ls = []
-    u_init_rs = []
-
-    counter = 0
-    bar = progressbar.ProgressBar(max_value=len(samples))
-    for sample in samples:
-        neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0], attr_avg_std_map, args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
-        neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1], attr_avg_std_map, args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
-        neighbors_ls.append(neighbors_l)
-        neighbors_rs.append(neighbors_r)
-        attributes_ls.append(attributes_l)
-        attributes_rs.append(attributes_r)
-        u_init_ls.append(u_init_l)
-        u_init_rs.append(u_init_r)
-        counter += 1
-        bar.update(counter)
-
-    return neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs
-
-
 def ask_to_clean_dir(dir_path):
     if len(os.listdir(dir_path)) != 0:
         choice = input('Do you want to delete all the files in the {}? (y/n)'.format(dir_path)).lower()
@@ -212,10 +188,36 @@ def ask_to_clean_dir(dir_path):
     return True
 
 
+def find_tfrecord_for(data_type, search_root):
+    return glob.glob('{}/{}*.tfrecord'.format(search_root, data_type))
+
+
+def parse_example_function(example_proto):
+    features = {
+                "label":            tf.FixedLenFeature((), dtype=tf.int64),
+                "neighbors_shape":  tf.FixedLenFeature((2), dtype=tf.int64),
+                "attributes_shape": tf.FixedLenFeature((2), dtype=tf.int64),
+                "u_init_shape":     tf.FixedLenFeature((2), dtype=tf.int64),
+                "neighbors_l":  tf.VarLenFeature(dtype=tf.float32),
+                "neighbors_r":  tf.VarLenFeature(dtype=tf.float32),
+                "attributes_l": tf.VarLenFeature(dtype=tf.float32),
+                "attributes_r": tf.VarLenFeature(dtype=tf.float32),
+                "u_init_l":     tf.VarLenFeature(dtype=tf.float32),
+                "u_init_r":     tf.VarLenFeature(dtype=tf.float32),
+               }
+    parsed_features = tf.parse_single_example(example_proto, features)
+    for feature_name in parsed_features:
+        if feature_name in ['label', 'neighbors_shape', 'attributes_shape', 'u_init_shape']:
+            continue
+        feature_type = feature_name.rstrip('_r').rstrip('_l')
+        parsed_features[feature_name] = tf.sparse_tensor_to_dense(parsed_features[feature_name])
+        parsed_features[feature_name] = tf.reshape(parsed_features[feature_name], parsed_features[feature_type + '_shape'])
+    return parsed_features["neighbors_l"], parsed_features["neighbors_r"], parsed_features["attributes_l"], parsed_features["attributes_r"], parsed_features["u_init_l"], parsed_features["u_init_r"], parsed_features["label"]
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description='Train the graph embedding network for function flow graph.')
-    parser.add_argument('TrainingDataPlk', help='The pickle format training data.')
-    parser.add_argument('PackedData', help='Path to store the packed learning data.')
+    parser.add_argument('TrainingDataDir', help='The path to the directory contains training data.')
     parser.add_argument('MODEL_DIR', help='The folder to save the model.')
     parser.add_argument('LOG_DIR', help='The folder to save the model log.')
     parser.add_argument('--LoadModel', dest='LoadModel', help='Load old model in MODEL_DIR.', action='store_true')
@@ -268,30 +270,40 @@ def main(argv):
         print('DebugMatsDir should be set when Debug mode is on.')
         sys.exit(-6)
 
-    with open(args.TrainingDataPlk, 'rb') as f:
-        learning_data = pickle.load(f)
-        attr_avg_std_map = normalize_data(learning_data['train']['sample'])
+    train_filenames = find_tfrecord_for('train', args.TrainingDataDir)
+    dataset = tf.data.TFRecordDataset(train_filenames)
+    dataset = dataset.map(parse_example_function, num_parallel_calls=8)
+    dataset = dataset.shuffle(buffer_size=10000).batch(args.BatchSize).repeat(args.Epochs)
+    dataset = dataset.prefetch(buffer_size=4000)
+    iterator = dataset.make_one_shot_iterator()
+    next_element = iterator.get_next()
+
+    test_filenames = find_tfrecord_for('test', args.TrainingDataDir)
+    test_dataset = tf.data.TFRecordDataset(test_filenames)
+    test_dataset = test_dataset.map(parse_example_function, num_parallel_calls=8)
+    test_iterator = test_dataset.make_one_shot_iterator()
+    test_next_element = test_iterator.get_next()
 
     print('Building model graph...... [{}]'.format(str(datetime.now())))
     with tf.device('/cpu:0'):
         global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
     with tf.variable_scope("siamese") as scope:
         # Build Training Graph
-        neighbors_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum)) # B x N x N
-        attributes_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim)) # B x N x d
-        u_init_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize)) # B x N x p
+        neighbors_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum), name='neighbors_left') # B x N x N
+        attributes_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim), name='attribute_left') # B x N x d
+        u_init_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize), name='u_init_left') # B x N x p
         graph_emb_left, W1, W2, P_n, u_left, W1_mul_X_left, sigma_output_left = build_emb_graph(neighbors_left, attributes_left, u_init_left, # N x p
                                                                                                 attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
 
         scope.reuse_variables()
 
-        neighbors_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum)) #B x N x N
-        attributes_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim)) # B x N x d
-        u_init_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize)) # B x N x p
+        neighbors_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum), name='neighbors_right') #B x N x N
+        attributes_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim), name='attributes_right') # B x N x d
+        u_init_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize), name='u_init_right') # B x N x p
         graph_emb_right, W1, W2, P_n, u_right, W1_mul_X_right, sigma_output_right = build_emb_graph(neighbors_right, attributes_right, u_init_right, # N x p
                                                                                                     attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
 
-        label = tf.placeholder(tf.float32, shape=(None, ))
+        label = tf.placeholder(tf.float32, shape=(None, ), name='label')
 
         norm_emb_left = tf.nn.l2_normalize(graph_emb_left, 1)
         norm_emb_right = tf.nn.l2_normalize(graph_emb_right, 1)
@@ -315,9 +327,9 @@ def main(argv):
         negative_num = tf.shape(tf.where(tf.equal(label, -1)))[0]
 
         # Bulid Inference Graph
-        neighbors_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum))
-        attributes_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim))
-        u_init_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize))
+        neighbors_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum), name='neighbors_test')
+        attributes_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim), name='attributes_test')
+        u_init_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize), name='u_init_test')
         graph_emb_inference, W1_inference, W2_inference, P_n_inference, u_v_inference, W1_mul_X_inference, sigma_output_inference = build_emb_graph(neighbors_test, attributes_test, u_init_test, attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
         norm_graph_emb_inference = tf.nn.l2_normalize(graph_emb_inference, 1)
 
@@ -352,58 +364,6 @@ def main(argv):
                 tsne_attributes.append(attributes)
                 tsne_u_inits.append(u_init)
                 tsne_data['labels'].append(sample['identifier'])
-    else:
-        if args.ShuffleLearningData:
-            samples, labels = shuffle_data(learning_data['train'])
-        else:
-            samples, labels = learning_data['train']['sample'], learning_data['train']['label']
-        if os.path.isfile(args.PackedData):
-            with open(args.PackedData, 'rb') as f:
-                packed_data = pickle.load(f)
-                neighbors_ls =       packed_data['neighbors_ls']
-                neighbors_rs =       packed_data['neighbors_rs']
-                attributes_ls =      packed_data['attributes_ls']
-                attributes_rs =      packed_data['attributes_rs']
-                u_init_ls =          packed_data['u_init_ls']
-                u_init_rs =          packed_data['u_init_rs']
-                labels =             packed_data['labels']
-                test_neighbors_ls =  packed_data['test_neighbors_ls']
-                test_neighbors_rs =  packed_data['test_neighbors_rs']
-                test_attributes_ls = packed_data['test_attributes_ls']
-                test_attributes_rs = packed_data['test_attributes_rs']
-                test_u_init_ls =     packed_data['test_u_init_ls']
-                test_u_init_rs =     packed_data['test_u_init_rs']
-                test_labels =        packed_data['test_labels']
-        else:
-            print('\tConverting training data... [{}]'.format(str(datetime.now())))
-            neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs = convert_to_training_data(samples, attr_avg_std_map, args, attributes_dim)
-            print()
-            print('\tConverting testing data... [{}]'.format(str(datetime.now())))
-            print()
-            test_neighbors_ls, test_neighbors_rs, test_attributes_ls, test_attributes_rs, test_u_init_ls, test_u_init_rs = convert_to_training_data(learning_data['test']['sample'], attr_avg_std_map, args, attributes_dim)
-            test_labels = learning_data['test']['label']
-
-            packed_data = {
-                'neighbors_ls'      : neighbors_ls,
-                'neighbors_rs'      : neighbors_rs,
-                'attributes_ls'     : attributes_ls,
-                'attributes_rs'     : attributes_rs,
-                'u_init_ls'         : u_init_ls,
-                'u_init_rs'         : u_init_rs,
-                'labels'            : labels,
-                'test_neighbors_ls' : test_neighbors_ls,
-                'test_neighbors_rs' : test_neighbors_rs,
-                'test_attributes_ls': test_attributes_ls,
-                'test_attributes_rs': test_attributes_rs,
-                'test_u_init_ls'    : test_u_init_ls,
-                'test_u_init_rs'    : test_u_init_rs,
-                'test_labels'       : test_labels,
-            }
-            with open(args.PackedData, 'wb') as f:
-                pickle.dump(packed_data, f)
-        if len(samples) != len(neighbors_ls):
-            print('The packed data does not have the same size as learning data. Please check the two files are correct.')
-            sys.exit(-7)
 
 
     print('Starting the tensorflow session...... [{}]'.format(str(datetime.now())))
@@ -446,7 +406,6 @@ def main(argv):
             print('Generate embedding vectors successfully. To view the visualization, please run:\n$ ./create_tsne_projector.py {} {} YOUR_EMBEDDING_LOG_DIR'.format(emb_plk_path, metadata_path))
         else:
             print('Start in training mode. [{}]'.format(str(datetime.now())))
-            num_step_per_epoch = int(math.ceil(len(samples) / args.BatchSize))
             epoch_loss = float('Inf')
             total_step = int(sess.run(global_step))
             train_acc = 0
@@ -454,58 +413,37 @@ def main(argv):
 
             num_positive = 0
             print('\tStart training epoch...... [{}]'.format(str(datetime.now())))
-            for cur_epoch in range(args.Epochs):
-                loss_sum = 0
-                cur_step = 0
-                correct = 0
-                if args.Debug:
-                    idx = 0
-                    for neighbors_l, neighbors_r, attributes_l, attributes_r, u_init_l, u_init_r, ground_truth in zip(neighbors_ls, neighbors_rs, attributes_ls, attributes_rs, u_init_ls, u_init_rs, labels):
-                        loss, sim = sess.run([loss_op, cos_similarity], {
-                            neighbors_left: [neighbors_l], attributes_left: [attributes_l], u_init_left: [u_init_l],
-                            neighbors_right: [neighbors_r], attributes_right: [attributes_r], u_init_right: [u_init_r],
-                            label: [ground_truth]
-                        })
-                        if loss > 3 or (loss < 0.1 and loss > 0):
-                            print(loss, samples[idx][0]['identifier'], samples[idx][1]['identifier'])
-                            if loss < 0.1 and loss > 0:
-                                num_positive += 1
-                            if num_positive <= 5 or loss > 3:
-                                pattern = str(ground_truth) + '_' + '{:.10E}'.format(loss) + '_' +  samples[idx][0]['identifier'] + '_' + samples[idx][1]['identifier']
-                                write_debug_mats(sess, debug_ops, {
-                                    neighbors_left: [neighbors_l], attributes_left: [attributes_l], u_init_left: [u_init_l],
-                                    neighbors_right: [neighbors_r], attributes_right: [attributes_r], u_init_right: [u_init_r]
-                                }, args.DebugMatsDir, samples[idx], pattern)
-                        idx += 1
 
-                # samples, labels = learning_data['train']['sample'], learning_data['train']['label']
+            test_neighbors_ls  = []
+            test_neighbors_rs  = []
+            test_attributes_ls = []
+            test_attributes_rs = []
+            test_u_init_ls     = []
+            test_u_init_rs     = []
+            test_labels        = []
+            while True:
+                try:
+                    test_neighbors_l, test_neighbors_r, test_attributes_l, test_attributes_r, test_u_init_l, test_u_init_r, test_label = sess.run(test_next_element)
+                except tf.errors.OutOfRangeError:
+                    break
+                test_neighbors_ls.append(test_neighbors_l)
+                test_neighbors_rs.append(test_neighbors_r)
+                test_attributes_ls.append(test_attributes_l)
+                test_attributes_rs.append(test_attributes_r)
+                test_u_init_ls.append(test_u_init_l)
+                test_u_init_rs.append(test_u_init_r)
+                test_labels.append(test_label)
+            while True:
+                try:
+                    cur_neighbors_ls, cur_neighbors_rs, cur_attributes_ls, cur_attributes_rs, cur_u_init_ls, cur_u_init_rs, cur_labels = sess.run(next_element)
 
-                num_train_correct = 0
-                num_train_pos_correct = 0
-                num_train_pos = 0
-                num_train_neg_correct = 0
-                num_train_neg = 0
-                for cur_step in range(num_step_per_epoch):
-                    cur_neighbors_ls  = neighbors_ls [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
-                    cur_neighbors_rs  = neighbors_rs [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
-                    cur_attributes_ls = attributes_ls[cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
-                    cur_attributes_rs = attributes_rs[cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
-                    cur_u_init_ls     = u_init_ls    [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
-                    cur_u_init_rs     = u_init_rs    [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
-                    cur_labels        = labels       [cur_step * args.BatchSize: (cur_step + 1) * args.BatchSize]
-
-                    _, loss, batch_acc, positive_acc, pos_num, negative_acc, neg_num = sess.run([train_op, loss_op, accuracy, positive_accuracy, positive_num, negative_accuracy, negative_num], {
+                    _, loss, batch_acc, positive_acc, negative_acc = sess.run([train_op, loss_op, accuracy, positive_accuracy, negative_accuracy], {
                         neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
                         neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
                         label: cur_labels
                     })
-                    num_train_correct += batch_acc * len(cur_neighbors_ls)
-                    num_train_pos_correct += positive_acc * pos_num
-                    num_train_pos += pos_num
-                    num_train_neg_correct += negative_acc * neg_num
-                    num_train_neg += neg_num
                     
-                    sys.stdout.write('Epoch: {:4}, BatchLoss: {:8.7f}, BatchStep: {:4}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f},TestAcc: {:.4f}  \r'.format(cur_epoch, loss, cur_step, total_step, train_acc, positive_acc, negative_acc, test_acc))
+                    sys.stdout.write('BatchLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f},TestAcc: {:.4f}  \r'.format(loss, total_step, batch_acc, positive_acc, negative_acc, test_acc))
                     sys.stdout.flush()
 
                     summary = sess.run(merged, {
@@ -516,26 +454,21 @@ def main(argv):
                     train_writer.add_summary(summary, total_step)
 
                     total_step = int(sess.run(global_step))
-                    loss_sum += loss
-                train_acc = num_train_correct / len(samples)
-                test_acc = sess.run(accuracy, {
-                    neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
-                    neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
-                    label: test_labels
-                })
-                test_acc_summary = tf.Summary()
-                test_acc_summary.value.add(tag='Accuracy/test_accuracy', simple_value=test_acc)
-                train_writer.add_summary(test_acc_summary, total_step)
 
-                epoch_loss = (loss_sum / math.ceil(len(samples) / args.BatchSize))
-                cur_epoch += 1
-                sys.stdout.write('Epoch: {:4}, EpochLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f}, TestAcc: {:.4f}                 \r'.format(cur_epoch, epoch_loss, total_step, train_acc, num_train_pos_correct / num_train_pos, num_train_neg_correct / num_train_neg, test_acc))
-                sys.stdout.flush()
-                print()
-                if args.UpdateModel:
-                    saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=global_step)
+                    test_acc = sess.run(accuracy, {
+                        neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
+                        neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
+                        label: test_labels
+                    })
+                    test_acc_summary = tf.Summary()
+                    test_acc_summary.value.add(tag='Accuracy/test_accuracy', simple_value=test_acc)
+                    train_writer.add_summary(test_acc_summary, total_step)
 
-            print('Training finished. [{}]'.format(str(datetime.now())))
+                    if args.UpdateModel:
+                        saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=global_step)
+                except tf.errors.OutOfRangeError:
+                    print('Training finished. [{}]'.format(str(datetime.now())))
+                    break
 
 
 if __name__ == '__main__':
