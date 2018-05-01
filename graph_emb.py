@@ -198,6 +198,8 @@ def parse_example_function(example_proto):
                 "neighbors_shape":  tf.FixedLenFeature((2), dtype=tf.int64),
                 "attributes_shape": tf.FixedLenFeature((2), dtype=tf.int64),
                 "u_init_shape":     tf.FixedLenFeature((2), dtype=tf.int64),
+                "identifier_left":  tf.FixedLenFeature((), dtype=tf.string),
+                "identifier_right": tf.FixedLenFeature((), dtype=tf.string),
                 "neighbors_l":  tf.VarLenFeature(dtype=tf.float32),
                 "neighbors_r":  tf.VarLenFeature(dtype=tf.float32),
                 "attributes_l": tf.VarLenFeature(dtype=tf.float32),
@@ -207,7 +209,7 @@ def parse_example_function(example_proto):
                }
     parsed_features = tf.parse_single_example(example_proto, features)
     for feature_name in parsed_features:
-        if feature_name in ['label', 'neighbors_shape', 'attributes_shape', 'u_init_shape']:
+        if feature_name in ['label', 'neighbors_shape', 'attributes_shape', 'u_init_shape', 'identifier_left', 'identifier_right']:
             continue
         feature_type = feature_name.rstrip('_r').rstrip('_l')
         parsed_features[feature_name] = tf.sparse_tensor_to_dense(parsed_features[feature_name])
@@ -423,7 +425,7 @@ def main(argv):
             test_labels        = []
             while True:
                 try:
-                    test_neighbors_l, test_neighbors_r, test_attributes_l, test_attributes_r, test_u_init_l, test_u_init_r, test_label = sess.run(test_next_element)
+                    test_neighbors_l, test_neighbors_r, test_attributes_l, test_attributes_r, test_u_init_l, test_u_init_r, test_label, identifiers_left, identifiers_right = sess.run(test_next_element)
                 except tf.errors.OutOfRangeError:
                     break
                 test_neighbors_ls.append(test_neighbors_l)

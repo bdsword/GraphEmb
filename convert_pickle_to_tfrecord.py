@@ -100,6 +100,10 @@ def _float_feature(value):
     return tf.train.Feature(float_list=tf.train.FloatList(value=value))
 
 
+def _bytes_feature(value):
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description='Convert the training pickle data to tfrecord format.')
     parser.add_argument('TrainingDataPlk', help='The pickle format training data.')
@@ -145,6 +149,8 @@ def main(argv):
                 "neighbors_shape": _int64_feature([args.MaxNodeNum, args.MaxNodeNum]),
                 "attributes_shape": _int64_feature([args.MaxNodeNum, attributes_dim]),
                 "u_init_shape": _int64_feature([args.MaxNodeNum, args.EmbeddingSize]),
+                "identifier_left": _bytes_feature(sample[0]['identifier'].encode('utf-8')),
+                "identifier_right": _bytes_feature(sample[1]['identifier'].encode('utf-8')),
             })
             example = tf.train.Example(features=features)
             writer.write(example.SerializeToString())
