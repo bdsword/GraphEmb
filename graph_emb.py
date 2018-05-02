@@ -480,23 +480,26 @@ def main(argv):
                     sys.stdout.write('Epoch: {:6}, BatchLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f},TestAcc: {:.4f}  \r'.format(cur_epoch, loss, total_step, batch_acc, positive_acc, negative_acc, test_acc))
                     sys.stdout.flush()
 
-                    summary = sess.run(merged, {
-                        neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
-                        neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
-                        label: cur_labels
-                    })
-                    train_writer.add_summary(summary, total_step)
+                    if args.UpdateModel:
+                        summary = sess.run(merged, {
+                            neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
+                            neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
+                            label: cur_labels
+                        })
+                        train_writer.add_summary(summary, total_step)
 
                     total_step = int(sess.run(global_step))
 
-                    test_acc = sess.run(accuracy, {
-                        neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
-                        neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
-                        label: test_labels
-                    })
-                    test_acc_summary = tf.Summary()
-                    test_acc_summary.value.add(tag='Accuracy/test_accuracy', simple_value=test_acc)
-                    train_writer.add_summary(test_acc_summary, total_step)
+                    if total_step % 100 == 0:
+                        test_acc = sess.run(accuracy, {
+                            neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
+                            neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
+                            label: test_labels
+                        })
+                        if args.UpdateModel:
+                            test_acc_summary = tf.Summary()
+                            test_acc_summary.value.add(tag='Accuracy/test_accuracy', simple_value=test_acc)
+                            train_writer.add_summary(test_acc_summary, total_step)
 
                     if args.UpdateModel:
                         saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=global_step)
