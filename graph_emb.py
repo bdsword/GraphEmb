@@ -490,20 +490,18 @@ def main(argv):
 
                     total_step = int(sess.run(global_step))
 
-                    if total_step % 100 == 0:
-                        test_acc = sess.run(accuracy, {
-                            neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
-                            neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
-                            label: test_labels
-                        })
-                        if args.UpdateModel:
-                            test_acc_summary = tf.Summary()
-                            test_acc_summary.value.add(tag='Accuracy/test_accuracy', simple_value=test_acc)
-                            train_writer.add_summary(test_acc_summary, total_step)
-
                     if args.UpdateModel:
                         saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=global_step)
                 except tf.errors.OutOfRangeError:
+                    test_acc = sess.run(accuracy, {
+                        neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
+                        neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
+                        label: test_labels
+                    })
+                    if args.UpdateModel:
+                        test_acc_summary = tf.Summary()
+                        test_acc_summary.value.add(tag='Accuracy/test_accuracy', simple_value=test_acc)
+                        train_writer.add_summary(test_acc_summary, total_step)
                     print('Epoch: {:6}, BatchLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f},TestAcc: {:.4f}'.format(cur_epoch, loss, total_step, (epoch_pos_sum + epoch_neg_sum) / (epoch_pos_num + epoch_neg_num), epoch_pos_sum / epoch_pos_num, epoch_neg_sum / epoch_neg_num, test_acc))
                     sys.stdout.flush()
                     cur_epoch += 1
