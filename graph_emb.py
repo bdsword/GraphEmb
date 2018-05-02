@@ -212,7 +212,7 @@ def parse_example_function(example_proto):
         feature_type = feature_name.rstrip('_r').rstrip('_l')
         parsed_features[feature_name] = tf.sparse_tensor_to_dense(parsed_features[feature_name])
         parsed_features[feature_name] = tf.reshape(parsed_features[feature_name], parsed_features[feature_type + '_shape'])
-    return parsed_features["neighbors_l"], parsed_features["neighbors_r"], parsed_features["attributes_l"], parsed_features["attributes_r"], parsed_features["u_init_l"], parsed_features["u_init_r"], parsed_features["label"]
+    return parsed_features["neighbors_l"], parsed_features["neighbors_r"], parsed_features["attributes_l"], parsed_features["attributes_r"], parsed_features["u_init_l"], parsed_features["u_init_r"], parsed_features["label"], parsed_features["identifier_left"], parsed_features["identifier_right"]
 
 
 def main(argv):
