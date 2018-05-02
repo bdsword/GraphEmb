@@ -120,16 +120,14 @@ def get_graph_info_mat(graph, attr_avg_std_map, max_node_num, attributes_dim, em
     neighbors = []
     attributes = []
 
-    neighbors.append(np.zeros(max_node_num))
-    attributes.append(np.zeros(attributes_dim))
     undir_graph = graph.to_undirected()
-    undir_graph = nx.relabel.convert_node_labels_to_integers(undir_graph, first_label=1)
+    undir_graph = nx.relabel.convert_node_labels_to_integers(undir_graph, first_label=0)
 
-    if max_node_num <= len(undir_graph):
+    if max_node_num < len(undir_graph):
         raise ValueError('Number of nodes in graph "{}" is larger than MaxNodeNum: {} >= MaxNodeNum'.format(undir_graph, len(undir_graph)))
 
     attr_names = ['num_calls', 'num_transfer', 'num_arithmetic', 'num_instructions', 'betweenness_centrality', 'num_offspring', 'num_string', 'num_numeric_constant']
-    for idx in range(1, max_node_num):
+    for idx in range(max_node_num):
         node_id = idx
         if node_id in undir_graph.nodes:
             neighbor_ids = list(undir_graph.neighbors(node_id)) 
@@ -250,6 +248,7 @@ def main(argv):
     parser.add_argument('--no-ShuffleLearningData', dest='ShuffleLearningData', help='Learning data shuffle mode off', action='store_false')
     parser.set_defaults(ShuffleLearningData=False)
     parser.add_argument('--TSNE_InputData', help='Data to generate embedding and do T-SNE.')
+    parser.add_argument('--TrainingPlk', help='Pickled data to calculate attr_avg_std_map.')
     parser.add_argument('--TF_LOG_LEVEL', default=3, type=int, help='Environment variable to TF_CPP_MIN_LOG_LEVEL')
     args = parser.parse_args()
 
@@ -358,6 +357,9 @@ def main(argv):
         tsne_neighbors = []
         tsne_attributes = []
         tsne_u_inits = []
+        with open(args.TrainingPlk, 'rb') as f_in:
+            data = pickle.load(f_in)
+            attr_avg_std_map = normalize_data(data['train']['sample'])
         with open(args.TSNE_InputData, 'rb') as f_in:
             data = pickle.load(f_in)
             for sample in data:
