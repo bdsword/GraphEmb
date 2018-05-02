@@ -272,19 +272,21 @@ def main(argv):
         print('DebugMatsDir should be set when Debug mode is on.')
         sys.exit(-6)
 
-    train_filenames = find_tfrecord_for('train', args.TrainingDataDir)
-    dataset = tf.data.TFRecordDataset(train_filenames)
-    dataset = dataset.map(parse_example_function, num_parallel_calls=8)
-    dataset = dataset.shuffle(buffer_size=10000).batch(args.BatchSize).repeat(args.Epochs)
-    dataset = dataset.prefetch(buffer_size=4000)
-    iterator = dataset.make_one_shot_iterator()
-    next_element = iterator.get_next()
+    with tf.device('/cpu:0'):
+        shuffle_seed = tf.placeholder(tf.int64, shape=[])
+        train_filenames = find_tfrecord_for('train', args.TrainingDataDir)
+        dataset = tf.data.TFRecordDataset(train_filenames)
+        dataset = dataset.map(parse_example_function, num_parallel_calls=8)
+        dataset = dataset.shuffle(buffer_size=10000, seed=shuffle_seed).batch(args.BatchSize)
+        dataset = dataset.prefetch(buffer_size=4000)
+        iterator = dataset.make_initializable_iterator()
+        next_element = iterator.get_next()
 
-    test_filenames = find_tfrecord_for('test', args.TrainingDataDir)
-    test_dataset = tf.data.TFRecordDataset(test_filenames)
-    test_dataset = test_dataset.map(parse_example_function, num_parallel_calls=8)
-    test_iterator = test_dataset.make_one_shot_iterator()
-    test_next_element = test_iterator.get_next()
+        test_filenames = find_tfrecord_for('test', args.TrainingDataDir)
+        test_dataset = tf.data.TFRecordDataset(test_filenames)
+        test_dataset = test_dataset.map(parse_example_function, num_parallel_calls=8)
+        test_iterator = test_dataset.make_one_shot_iterator()
+        test_next_element = test_iterator.get_next()
 
     print('Building model graph...... [{}]'.format(str(datetime.now())))
     with tf.device('/cpu:0'):
@@ -415,9 +417,6 @@ def main(argv):
             train_acc = 0
             test_acc = 0
 
-            num_positive = 0
-            print('\tStart training epoch...... [{}]'.format(str(datetime.now())))
-
             test_neighbors_ls  = []
             test_neighbors_rs  = []
             test_attributes_ls = []
@@ -425,6 +424,7 @@ def main(argv):
             test_u_init_ls     = []
             test_u_init_rs     = []
             test_labels        = []
+            print('\tLoading testing dataset.... [{}]'.format(str(datetime.now())))
             while True:
                 try:
                     test_neighbors_l, test_neighbors_r, test_attributes_l, test_attributes_r, test_u_init_l, test_u_init_r, test_label, identifiers_left, identifiers_right = sess.run(test_next_element)
@@ -437,17 +437,47 @@ def main(argv):
                 test_u_init_ls.append(test_u_init_l)
                 test_u_init_rs.append(test_u_init_r)
                 test_labels.append(test_label)
+
+            cur_epoch = 0
+            epoch_pos_sum = 0
+            epoch_pos_num = 0
+            epoch_neg_sum = 0
+            epoch_neg_num = 0
+            if args.Debug:
+                false_count = 0
+            sess.run(iterator.initializer, feed_dict={shuffle_seed: cur_epoch})
+            print('\tStart training epoch...... [{}]'.format(str(datetime.now())))
             while True:
                 try:
-                    cur_neighbors_ls, cur_neighbors_rs, cur_attributes_ls, cur_attributes_rs, cur_u_init_ls, cur_u_init_rs, cur_labels = sess.run(next_element)
+                    cur_neighbors_ls, cur_neighbors_rs, cur_attributes_ls, cur_attributes_rs, cur_u_init_ls, cur_u_init_rs, cur_labels, identifiers_left, identifiers_right = sess.run(next_element)
 
-                    _, loss, batch_acc, positive_acc, negative_acc = sess.run([train_op, loss_op, accuracy, positive_accuracy, negative_accuracy], {
+                    _, loss, batch_acc, positive_acc, pos_num, negative_acc, neg_num = sess.run([train_op, loss_op, accuracy, positive_accuracy, positive_num, negative_accuracy, negative_num], {
                         neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
                         neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
                         label: cur_labels
                     })
-                    
-                    sys.stdout.write('BatchLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f},TestAcc: {:.4f}  \r'.format(loss, total_step, batch_acc, positive_acc, negative_acc, test_acc))
+
+                    epoch_pos_sum += (positive_acc * pos_num)
+                    epoch_neg_sum += (negative_acc * neg_num)
+                    epoch_pos_num += pos_num
+                    epoch_neg_num += neg_num
+
+                    if args.Debug:
+                        if cur_epoch == 0:
+                            for cur_neighbors_l, cur_neighbors_r, cur_attributes_l, cur_attributes_r, cur_u_init_l, cur_u_init_r, cur_label, identifier_left, identifier_right in zip(cur_neighbors_ls, cur_neighbors_rs, cur_attributes_ls, cur_attributes_rs, cur_u_init_ls, cur_u_init_rs, cur_labels, identifiers_left, identifiers_right):
+                                cos_sim, loss, batch_acc, positive_acc, negative_acc = sess.run([cos_similarity, loss_op, accuracy, positive_accuracy, negative_accuracy], {
+                                    neighbors_left: [cur_neighbors_l], attributes_left: [cur_attributes_l], u_init_left: [cur_u_init_l],
+                                    neighbors_right: [cur_neighbors_r], attributes_right: [cur_attributes_r], u_init_right: [cur_u_init_r],
+                                    label: [cur_label]
+                                })
+                                if cur_label != np.sign(cos_sim[0]):
+                                    print(cur_label, '#', '{:10.8f}'.format(cos_sim[0]), '#', identifier_left.decode('utf-8'), '#', identifier_right.decode('utf-8'))
+                                    false_count += 1
+                        else:
+                            print('False count: ', false_count)
+                            sys.exit(-1)
+
+                    sys.stdout.write('Epoch: {:6}, BatchLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f},TestAcc: {:.4f}  \r'.format(cur_epoch, loss, total_step, batch_acc, positive_acc, negative_acc, test_acc))
                     sys.stdout.flush()
 
                     summary = sess.run(merged, {
@@ -471,8 +501,18 @@ def main(argv):
                     if args.UpdateModel:
                         saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=global_step)
                 except tf.errors.OutOfRangeError:
-                    print('Training finished. [{}]'.format(str(datetime.now())))
-                    break
+                    print('Epoch: {:6}, BatchLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f},TestAcc: {:.4f}'.format(cur_epoch, loss, total_step, (epoch_pos_sum + epoch_neg_sum) / (epoch_pos_num + epoch_neg_num), epoch_pos_sum / epoch_pos_num, epoch_neg_sum / epoch_neg_num, test_acc))
+                    sys.stdout.flush()
+                    cur_epoch += 1
+                    epoch_pos_sum = 0
+                    epoch_neg_sum = 0
+                    epoch_pos_num = 0
+                    epoch_neg_num = 0
+                    if cur_epoch < args.Epochs:
+                        sess.run(iterator.initializer, feed_dict={shuffle_seed: cur_epoch})
+                    else:
+                        print('Training finished. [{}]'.format(str(datetime.now())))
+                        break
 
 
 if __name__ == '__main__':
