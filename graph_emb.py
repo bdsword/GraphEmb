@@ -312,23 +312,35 @@ def main(argv):
         norm_emb_left = tf.nn.l2_normalize(graph_emb_left, 1)
         norm_emb_right = tf.nn.l2_normalize(graph_emb_right, 1)
         cos_similarity = tf.reduce_sum(tf.multiply(norm_emb_left, norm_emb_right), 1)
-        # loss_op = tf.reduce_mean(tf.square(cos_similarity - label))
 
-        rad = cos_similarity
-        loss_p = (1+label)*tf.cast(tf.less(rad, 0.7),tf.float32)*(1+0.7-rad) # > 45 degree, loss is the degree
-        loss_n = (1-label)*tf.cast(tf.greater(rad, 0.7),tf.float32)*(1+rad-0.7) # < 45 degree, loss is 45-degree
-        loss_op = tf.reduce_mean( tf.square(loss_p + loss_n) )
-
-        # accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.sign(cos_similarity), label), tf.float32)) / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
-        cos_45 = np.cos(np.pi/4) # 1/sqrt(2)
-        accuracy = tf.add( tf.reduce_sum(tf.cast(tf.equal(tf.cast(tf.greater(cos_similarity, cos_45), tf.float32), label), tf.float32)),\
-                    tf.reduce_sum(tf.cast(tf.equal(tf.cast(tf.less(cos_similarity, cos_45), tf.float32), tf.negative(label)), tf.float32))) \
-                    / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
-
-        positive_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - cos_45), tf.where(tf.equal(label, 1))), 1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, 1)))[0], tf.float32)
+        # Paper's Loss
+        '''
+        loss_op = tf.reduce_mean(tf.square(cos_similarity - label))
+        accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.sign(cos_similarity), label), tf.float32)) / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
+        positive_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity), tf.where(tf.equal(label, 1))), 1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, 1)))[0], tf.float32)
         positive_num = tf.shape(tf.where(tf.equal(label, 1)))[0]
-        negative_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - cos_45), tf.where(tf.equal(label, -1))), -1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, -1)))[0], tf.float32)
+        negative_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity), tf.where(tf.equal(label, -1))), -1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, -1)))[0], tf.float32)
         negative_num = tf.shape(tf.where(tf.equal(label, -1)))[0]
+        '''
+        # End of Paper's Loss
+
+        # Vic's Loss
+        loss_p = (1 + label) * (1 - cos_similarity) # loss is the degree
+        loss_n = (1 - label) * tf.cast(tf.greater(cos_similarity, 0.5), tf.float32) * (1 + cos_similarity - 0.5)
+        loss_op = tf.reduce_mean( tf.square(loss_p + loss_n) )
+        accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.sign(cos_similarity - 0.5), label), tf.float32)) / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
+        positive_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - 0.5), tf.where(tf.equal(label, 1))), 1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, 1)))[0], tf.float32)
+        positive_num = tf.shape(tf.where(tf.equal(label, 1)))[0]
+        negative_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - 0.5), tf.where(tf.equal(label, -1))), -1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, -1)))[0], tf.float32)
+        negative_num = tf.shape(tf.where(tf.equal(label, -1)))[0]
+        # End of Vic's Loss
+
+        # Debug ops
+        bingo = tf.cast(tf.equal(tf.sign(cos_similarity), label), tf.float32)
+        correct_idx = tf.where(tf.equal(bingo, 1))
+        incorrect_idx = tf.where(tf.equal(bingo, 0))
+
+
 
         # Bulid Inference Graph
         neighbors_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum), name='neighbors_test')
@@ -353,6 +365,7 @@ def main(argv):
     merged = tf.summary.merge_all()
 
     train_op = tf.train.AdamOptimizer(args.LearningRate).minimize(loss_op, global_step=global_step)
+    # train_op = tf.train.GradientDescentOptimizer(args.LearningRate).minimize(loss_op, global_step=global_step)
     
     print('Preparing the data for the model...... [{}]'.format(str(datetime.now())))
     if args.TSNE_Mode:
