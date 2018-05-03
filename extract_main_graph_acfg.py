@@ -23,15 +23,30 @@ def extract_main_graph(file_path):
     return main_sub_graph
 
 
-def add_attributes_to_graph(graph, function_embs):
+def add_attributes_to_graph(graph, function_embs, default_dims):
     """
     file_path: Path to the dot file
     function_embs: A dict map function name to function embedding
     """
     for node in graph.nodes:
-        func_name = graph.nodes[node]['label']
-        graph.nodes[node]['attributes'] = function_embs[func_name]
+        func_name = graph.nodes[node]['label'].lstrip('"').rstrip('\\l"')
+        if func_name in function_embs:
+            graph.nodes[node]['attributes'] = function_embs[func_name]
+        else:
+            graph.nodes[node]['attributes'] = np.zeros(default_dims)
+
     return graph
+
+
+def check_function_embs_and_get_dims(function_embs):
+    first_dim = None
+    for func_name in function_embs:
+        if first_dim == None:
+            first_dim = np.shape(function_embs[func_name])
+        else:
+            if first_dim != np.shape(function_embs[func_name]):
+                raise ValueError('The dimensions of each vectors in FunctionEmbsPlk should be all the same.')
+    return first_dim
 
 
 def main(argv):
@@ -50,6 +65,7 @@ def main(argv):
     function_embs = None
     with open(args.FunctionEmbsPlk, 'rb') as f:
         function_embs = pickle.load(f)
+    default_dims = check_function_embs_and_get_dims(function_embs)
 
     for f in files:
         if not os.path.isfile(f):
@@ -62,7 +78,7 @@ def main(argv):
 
         print('>> Processing {}'.format(f))
         main_graph = extract_main_graph(dot_f)
-        attributed_main_graph = add_attributes_to_graph(main_graph, function_embs)
+        attributed_main_graph = add_attributes_to_graph(main_graph, function_embs, default_dims)
         binary_graph_dict[f] = attributed_main_graph
 
     output_path = args.OutputPickleFile
