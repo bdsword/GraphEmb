@@ -55,7 +55,7 @@ def main(argv):
         if not os.path.isfile(f):
             print('{} is not a reqular file.'.format(f))
             sys.exit(-2)
-        dot_f = f + '.dot'
+        dot_f = os.path.splitext(f)[0] + '.dot'
         if not os.path.isfile(dot_f):
             print('No dot file for {}.'.format(f))
             sys.exit(-3)
