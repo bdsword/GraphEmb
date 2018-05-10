@@ -51,39 +51,34 @@ def check_function_embs_and_get_dims(function_embs):
 
 def main(argv):
     parser = argparse.ArgumentParser(description='Extracts subgraph from a dot file which contains most number of child nodes.')
-    parser.add_argument('ListFile', help='A text file contains a list of binary file path to be processed.')
-    parser.add_argument('FunctionEmbsPlk', help='A pickle file contains a list of function embeddings.')
-    parser.add_argument('OutputPickleFile', help='Path to write output pickle file.')
+    parser.add_argument('CallGraph', help='A dot file contains the call graph.')
+    parser.add_argument('FunctionEmbsPlk', help='A pickle file contains a list of function embeddings in the given call graph.')
+    parser.add_argument('OutputPickleFile', help='Path to write output pickle file contains the ACG of input call graph.')
     parser.add_argument('--debug', metavar='EnableDebugMode', type=bool, default=False, help='Enable debug mode. (Default: False)')
+    parser.add_argument('--verbose', metavar='EnableVerboseMode', type=bool, default=False, help='Enable debug mode. (Default: False)')
     args = parser.parse_args()
 
-    binary_graph_dict = dict()
-    with open(args.ListFile, 'r') as f:
-        lines = f.readlines()
-        files = [line.strip('\n') for line in lines if len(line.strip('\n')) != 0]
 
     function_embs = None
     with open(args.FunctionEmbsPlk, 'rb') as f:
         function_embs = pickle.load(f)
     default_dims = check_function_embs_and_get_dims(function_embs)
 
-    for f in files:
-        if not os.path.isfile(f):
-            print('{} is not a reqular file.'.format(f))
-            sys.exit(-2)
-        dot_f = os.path.splitext(f)[0] + '.dot'
-        if not os.path.isfile(dot_f):
-            print('No dot file for {}.'.format(f))
-            sys.exit(-3)
+    if not os.path.isfile(args.CallGraph):
+        print('{} does not exist.'.format(args.CallGraph))
+        sys.exit(-1)
+    if os.path.splitext(args.CallGraph)[1] != '.dot':
+        print('{} is not a dot file.'.format(args.CallGraph))
+        sys.exit(-2)
 
-        print('>> Processing {}'.format(f))
-        main_graph = extract_main_graph(dot_f)
-        attributed_main_graph = add_attributes_to_graph(main_graph, function_embs, default_dims)
-        binary_graph_dict[f] = attributed_main_graph
+    if args.verbose:
+        print('>> Processing {}'.format(args.CallGraph))
+    main_graph = extract_main_graph(args.CallGraph)
+    attributed_main_graph = add_attributes_to_graph(main_graph, function_embs, default_dims)
 
     output_path = args.OutputPickleFile
     with open(output_path, 'wb') as f:
-        pickle.dump(binary_graph_dict, f)
+        pickle.dump(attributed_main_graph, f)
 
 
 if __name__ == '__main__':
