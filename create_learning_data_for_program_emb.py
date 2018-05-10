@@ -171,44 +171,52 @@ def get_function_list(graph):
     return func_names
 
 
-def build_func_embs(funcs_dot_list, sess, args, norm_graph_emb_inference, neighbors_test, attributes_test, u_init_test, create_cache=True):
+def build_func_embs(funcs_dot_dict, arch, sess, args, norm_graph_emb_inference, neighbors_test, attributes_test, u_init_test, create_cache=True, cache_path=None):
     func_embs = {}
-    for func_dot in funcs_dot_list:
+    for func in funcs_dot_dict:
+        func_dot = funcs_dot_dict[func]
         if not os.path.isfile(func_dot):
-            print('Cannot find function {} of program {} in it\'s funcitons folder.'.format(func, cg_path))
+            print('{} does not exist.'.format(func_dot))
             embs = np.zeros(args.EmbeddingSize)
         else:
-            path_without_ext = os.path.splitext(func_dot)[0]
-            acfg_plk = path_without_ext + '.maxnode{}_emb{}.acfg.plk'.format(args.MaxNodeNum, args.EmbeddingSize)
-
-            # Try to create function ACFG pickled file if pickle file do not exist
-            if not os.path.isfile(acfg_plk):
-                try:
-                    acfg = create_acfg_from_file(func_dot, arch)
-                    if create_cache:
-                        with open(acfg_plk, 'wb') as f:
-                            pickle.dump(acfg, f)
-                except:
-                    print('!!! Failed to process {}. !!!'.format(func_dot))
-                    continue
+            dot_statinfo = os.stat(func_dot)
+            if dot_statinfo.st_size == 0:
+                embs = np.zeros(args.EmbeddingSize)
             else:
-                with open(acfg_path, 'rb') as f:
-                    acfg = pickle.load(f)
+                path_without_ext = os.path.splitext(func_dot)[0]
+                acfg_plk = path_without_ext + '.maxnode{}_emb{}.acfg.plk'.format(args.MaxNodeNum, args.EmbeddingSize)
 
-            if len(acfg) <= args.MaxNodeNum:
-                neighbors, attributes, u_init = get_graph_info_mat({'graph': acfg}, args.MaxNodeNum, args.AttrDims, args.EmbeddingSize)
-                embs = sess.run(norm_graph_emb_inference, {neighbors_test: [neighbors], attributes_test: [attributes], u_init_test: [u_init]})[0]
-            else:
-                raise IndexError('{} contain funciton {} which has more node num than {}. ({} > {})'.format(row['binary_path'], func, args.MaxNodeNum, len(acfg), args.MaxNodeNum))
+                # Try to create function ACFG pickled file if pickle file do not exist
+                if not os.path.isfile(acfg_plk):
+                    try:
+                        acfg = create_acfg_from_file(func_dot, arch)
+                        if create_cache:
+                            with open(acfg_plk, 'wb') as f:
+                                pickle.dump(acfg, f)
+                    except Exception as e:
+                        print('!!! Failed to process {}. !!!'.format(func_dot))
+                        print('Exception: {}'.format(e))
+                        print()
+                        continue
+                else:
+                    with open(acfg_plk, 'rb') as f:
+                        acfg = pickle.load(f)
+
+                if len(acfg) <= args.MaxNodeNum:
+                    neighbors, attributes, u_init = get_graph_info_mat({'graph': acfg}, args.MaxNodeNum, args.AttrDims, args.EmbeddingSize)
+                    embs = sess.run(norm_graph_emb_inference, {neighbors_test: [neighbors], attributes_test: [attributes], u_init_test: [u_init]})[0]
+                else:
+                    raise IndexError('{} contain funciton {} which has more node num than {}. ({} > {})'.format(row['binary_path'], func, args.MaxNodeNum, len(acfg), args.MaxNodeNum))
         func_embs[func] = embs
 
-    if create_cache:
-        with open(cg_func_embs_plk_path, 'wb') as f:
+    if create_cache and not cache_path:
+        with open(cache_path, 'wb') as f:
             pickle.dump(func_embs, f)
     return func_embs
 
 
 def embed_func_emb_to_graph(graph, function_embs):
+    default_dims = len(function_embs[list(function_embs.keys())[0]])
     for node in graph.nodes:
         func_name = graph.nodes[node]['label'].lstrip('"').rstrip('\\l"')
         if func_name in function_embs:
@@ -222,15 +230,18 @@ def create_acg_by_row(row, sess, args, norm_graph_emb_inference, neighbors_test,
     cg_path = os.path.splitext(row['binary_path'])[0] + '.dot'
     funcs_dir = os.path.splitext(row['binary_path'])[0] + '_functions'
     acg_plk = os.path.splitext(row['binary_path'])[0] + '.maxnode{}_emb{}.acg.plk'.format(args.MaxNodeNum, args.EmbeddingSize)
+    cache_func_embs_plk = os.path.splitext(row['binary_path'])[0] + '.maxnode{}_emb{}.func_embs.plk'.format(args.MaxNodeNum, args.EmbeddingSize)
 
     main_graph = extract_main_graph(cg_path)
     if len(main_graph) > args.MaxNodeNum:
         return None
 
     funcs = get_function_list(main_graph)
-    func_dots = [os.path.join(funcs_dir, func + '.dot') for func in funcs]
+    func_dots = {}
+    for func in funcs:
+        func_dots[func] = os.path.join(funcs_dir, func + '.dot')
     try:
-        func_embs = build_func_embs(func_dot, sess, args, norm_graph_emb_inference, neighbors_test, attributes_test, u_init_test)
+        func_embs = build_func_embs(func_dots, row['arch'], sess, args, norm_graph_emb_inference, neighbors_test, attributes_test, u_init_test, True, cache_func_embs_plk)
         acg = embed_func_emb_to_graph(main_graph, func_embs)
     except IndexError as e:
         print(e)
