@@ -233,6 +233,7 @@ def main(argv):
     parser.add_argument('--BatchSize', type=int, default=32, help='Number of step per-epoch.')
     parser.add_argument('--LearningRate', type=float, default=0.0001, help='The learning rate for the model.')
     parser.add_argument('--T', type=int, default=5, help='The T parameter in the model.(How many hops to propagate information to.)')
+    parser.add_argument('--AttrDims', type=int, default=8, help='The dimensions of the attributes.')
     parser.add_argument('--MaxNodeNum', type=int, default=200, help='The max number of nodes per ACFG.')
     parser.add_argument('--Epochs', type=int, default=1000, help='The number of epochs to run.')
     parser.add_argument('--NumberOfRelu', type=int, default=2, help='The number of relu layer in the sigma function.')
@@ -257,7 +258,7 @@ def main(argv):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.GPU_ID)
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = str(args.TF_LOG_LEVEL)
 
-    attributes_dim = get_number_of_attribute()
+    attributes_dim = args.AttrDims
 
     if not os.path.isdir(args.MODEL_DIR):
         print('MODEL_DIR folder should be a valid folder.')
