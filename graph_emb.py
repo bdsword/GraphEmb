@@ -505,7 +505,9 @@ def main(argv):
                     total_step = int(sess.run(global_step))
 
                     if args.UpdateModel:
-                        saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=global_step)
+                        if os.path.isabs(args.MODEL_DIR):
+                            relative_model_dir = os.path.relpath(args.MODEL_DIR, os.getcwd())
+                        saver.save(sess, os.path.join(relative_model_dir, 'model.ckpt'), global_step=global_step)
                 except tf.errors.OutOfRangeError:
                     test_acc = sess.run(accuracy, {
                         neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
