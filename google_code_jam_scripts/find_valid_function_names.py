@@ -39,7 +39,7 @@ def list_function_names(q, lock):
                     # mangled_out = mangled_out.decode('utf-8', 'ignore')
                     func_prototype_map[func_name] = func_prototype
                 # print('>\t{}'.format(func_prototype_map.keys()))
-                archs = ['x86_64_O0', 'x86_64_O1', 'x86_64_O2', 'x86_64_O3', 'arm', 'win']
+                archs = ['origin', 'sub', 'fla']
                 arch_unmangled_funcs = {}
                 for arch in archs:
                     arch_unmangled_funcs[arch] = {}
