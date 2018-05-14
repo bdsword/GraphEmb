@@ -13,22 +13,9 @@ import progressbar
 import time
 import re
 import traceback
+from utils import extract_main_graph
 from config import archs
 from create_acfg_with_src_funcs_parallel import create_acfg_from_file
-
-
-def extract_main_graph(file_path):
-    graph = nx.drawing.nx_pydot.read_dot(file_path)
-    undired_graph = graph.to_undirected()
-    sub_graphs = nx.connected_component_subgraphs(undired_graph)
-    max_node_num = -1
-    main_sub_graph = None
-    for i, sg in enumerate(sub_graphs):
-        num_nodes = sg.number_of_nodes()
-        if num_nodes > max_node_num:
-            max_node_num = num_nodes
-            main_sub_graph = sg
-    return main_sub_graph
 
 
 def sigma_function(input_l_v, P_n, relu_layer_num, batch_size, max_node_num, embedding_size):
@@ -362,9 +349,6 @@ def main(argv):
                             pos_sample = [{'graph': acg_left, 'identifier': id_left}, {'graph': acg_right, 'identifier': id_right}]
                             positive_pool.append(pos_sample)
                             count += 1
-                            if count == 10:
-                                sys.exit(-3)
-
                             if count % 100 == 0:
                                 with open('positive_program_pool.plk', 'wb') as f:
                                     pickle.dump(positive_pool, f)
