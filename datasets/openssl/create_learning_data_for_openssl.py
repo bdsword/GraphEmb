@@ -129,8 +129,8 @@ def main(argv):
         if args.AcceptMaxNodeNum and (len(graph_left) > args.AcceptMaxNodeNum or len(graph_right) > args.AcceptMaxNodeNum):
             continue
 
-        data_pattern_left  = '{}:{}:{}'.format(row_pair[0]['bin_name'], row_pair[0][i'arch'], row_pair[0]['function_name'])
-        data_pattern_right = '{}:{}:{}'.format(row_pair[1]['bin_name'], row_pair[1][i'arch'], row_pair[1]['function_name'])
+        data_pattern_left  = '{}:{}:{}'.format(row_pair[0]['bin_name'], row_pair[0]['arch'], row_pair[0]['function_name'])
+        data_pattern_right = '{}:{}:{}'.format(row_pair[1]['bin_name'], row_pair[1]['arch'], row_pair[1]['function_name'])
         # Check the pattern have not been used
         if '{}_{}'.format(data_pattern_left, data_pattern_right) not in used_pattern and '{}_{}'.format(data_pattern_right, data_pattern_left) not in used_pattern:
             negative_pool.append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}]) 
