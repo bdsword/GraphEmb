@@ -8,47 +8,13 @@ import sys
 import shutil
 import csv
 import numpy as np
-from utils import _start_shell
 from random import shuffle
 import pickle
 import argparse
 import subprocess
 import progressbar
 from datetime import datetime
-
-
-def get_number_of_attribute():
-    from statistical_features import statistical_features
-    from structural_features import structural_features
-    return len(statistical_features) + len(structural_features)
-
-
-def normalize_data(samples):
-    attr_names = {
-            'num_calls': [],
-            'num_transfer': [],
-            'num_arithmetic': [],
-            'num_instructions': [],
-            'betweenness_centrality': [],
-            'num_offspring': [],
-            'num_string': [],
-            'num_numeric_constant': []}
-     
-    for attr_name in attr_names:
-        for pair in samples:
-            for i in range(2):
-                graph = pair[i]['graph']
-                for node_id in graph.nodes:
-                    attr_names[attr_name].append(graph.nodes[node_id][attr_name])
-    attr_avg_std_map = {} 
-    for attr_name in attr_names:
-        attr_avg_std_map[attr_name] = {}
-        attr_avg_std_map[attr_name]['avg'] = np.average(attr_names[attr_name])
-        attr_avg_std_map[attr_name]['std'] = np.std(attr_names[attr_name])
-        if attr_avg_std_map[attr_name]['std'] == 0:
-            attr_avg_std_map[attr_name]['std'] = 1
-
-    return attr_avg_std_map
+from utils.eval_utils import _start_shell
 
 
 def n_hot(max_node_num, ids):
@@ -58,7 +24,7 @@ def n_hot(max_node_num, ids):
     return v
 
 
-def get_graph_info_mat(graph, attr_avg_std_map, max_node_num, attributes_dim, emb_size):
+def get_graph_info_mat(graph, max_node_num, attributes_dim, emb_size):
     graph = graph['graph']
     neighbors = []
     attributes = []
@@ -69,15 +35,12 @@ def get_graph_info_mat(graph, attr_avg_std_map, max_node_num, attributes_dim, em
     if max_node_num < len(undir_graph):
         raise ValueError('Number of nodes in graph "{}" is larger than MaxNodeNum: {} >= MaxNodeNum'.format(undir_graph, len(undir_graph)))
 
-    attr_names = ['num_calls', 'num_transfer', 'num_arithmetic', 'num_instructions', 'betweenness_centrality', 'num_offspring', 'num_string', 'num_numeric_constant']
     for idx in range(max_node_num):
         node_id = idx
         if node_id in undir_graph.nodes:
             neighbor_ids = list(undir_graph.neighbors(node_id)) 
             neighbors.append(n_hot(max_node_num, neighbor_ids))
-            attrs = []
-            for attr_name in attr_names:
-                attrs.append((undir_graph.nodes[node_id][attr_name] - attr_avg_std_map[attr_name]['avg']) / attr_avg_std_map[attr_name]['std'])
+            attrs = undir_graph.nodes[node_id]['attributes']
             attributes.append(attrs)
         else:
             neighbors.append(n_hot(max_node_num, None))
@@ -112,12 +75,13 @@ def main(argv):
     parser.add_argument('EmbeddingSize', help='Embedding size for the model.', type=int)
     parser.add_argument('TrainingShardNum', help='Number of shard to split datasets into.', type=int)
     parser.add_argument('TestShardNum', help='Number of shard to split datasets into.', type=int)
+    parser.add_argument('FuncEmbSize', help='Number of embedding size of each function.', type=int)
+
     args = parser.parse_args()
 
-    attributes_dim = get_number_of_attribute()
+    attributes_dim = args.FuncEmbSize
     with open(args.TrainingDataPlk, 'rb') as f:
         learning_data = pickle.load(f)
-        attr_avg_std_map = normalize_data(learning_data['train']['sample'])
 
     shard_num = {'train': args.TrainingShardNum, 'test': args.TestShardNum}
     for cur_data_type in ['train', 'test']:
@@ -135,8 +99,8 @@ def main(argv):
             if cur_sample_idx % num_sample_per_shard == 0:
                 writer = tf.python_io.TFRecordWriter(os.path.join(args.OutputDir, "{}-{}-of-{}.tfrecord".format(cur_data_type, cur_shard + 1, shard_num[cur_data_type])))
 
-            neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0], attr_avg_std_map, args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
-            neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1], attr_avg_std_map, args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
+            neighbors_l, attributes_l, u_init_l = get_graph_info_mat(sample[0], args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
+            neighbors_r, attributes_r, u_init_r = get_graph_info_mat(sample[1], args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
 
             features = tf.train.Features(feature={
                 "label": _int64_feature([label]),
