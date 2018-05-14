@@ -2,11 +2,8 @@
 import networkx as nx
 import argparse
 import sys
-from statistical_features import statistical_features
-from structural_features import structural_features
 import pickle
 import numpy as np
-from utils import _start_shell
 import re
 import os
 import sqlite3
@@ -16,6 +13,8 @@ import multiprocessing
 import subprocess
 import time
 import progressbar
+from utils.graph_utils import create_acfg_from_file
+from utils.eval_utils import _start_shell
 
 
 def progressbar_process(q, lock, counter):
@@ -29,23 +28,6 @@ def progressbar_process(q, lock, counter):
             break
         bar.update(counter.value)
         time.sleep(0.1)
-
-
-def get_statistical_features(graph, arch):
-    features = dict()
-    for feature_func in statistical_features:
-        features[feature_func.__name__] = dict()
-        for node in graph.nodes:
-            code = graph.nodes[node]['label']
-            features[feature_func.__name__][node] = float(feature_func(code, arch))
-    return features
-
-
-def get_structural_features(graph):
-    features = dict()
-    for feature_func in structural_features:
-        features[feature_func.__name__] = feature_func(graph)
-    return features 
 
 
 def create_acfg_process(q, lock, sqlite_path, counter):
@@ -77,27 +59,6 @@ def create_acfg_process(q, lock, sqlite_path, counter):
                     .format(TABLE_NAME, binary_path, bin_name, acfg_path, arch, function_name, author_name, contest_name))
         conn.commit()
         counter.value += 1
-
-
-def create_acfg_from_file(file_path, arch):
-    cached_plk = file_path + '.nxgraph.plk'
-    if os.path.isfile(cached_plk):
-        with open(cached_plk, 'rb') as f:
-            graph = pickle.load(f)
-    else:
-        graph = nx.drawing.nx_pydot.read_dot(file_path)
-        with open(cached_plk, 'wb') as f:
-            pickle.dump(graph, f)
-
-    features_dict = get_statistical_features(graph, arch)
-    for feature_name in features_dict:
-        nx.set_node_attributes(graph, features_dict[feature_name], feature_name)
-
-    feature_dict = get_structural_features(graph)
-    for feature_name in feature_dict:
-        nx.set_node_attributes(graph, feature_dict[feature_name], feature_name)
-
-    return graph
 
 
 def main(argv):

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import sqlite3
-import networkx as nx
 import argparse
 import sys
 import re
@@ -10,6 +9,7 @@ import queue
 import multiprocessing
 import progressbar
 import time
+from utils.graph_utils import read_graph
 
 
 def progressbar_process(q, lock, counter, progressbar_close):
@@ -43,7 +43,7 @@ def fetch_program_process(q, lock, sqlite_path, counter):
                 if os.path.splitext(fname)[1] != '.dot':
                     continue
                 try:
-                    graph = nx.drawing.nx_pydot.read_dot(os.path.join(functions_folder, fname))
+                    graph = read_graph(os.path.join(functions_folder, fname))
                 except Exception as e:
                     continue
                 if max_node_num < len(graph):

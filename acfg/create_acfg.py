@@ -3,44 +3,13 @@ import networkx as nx
 import argparse
 import glob
 import sys
-from statistical_features import statistical_features
-from structural_features import structural_features
 import pickle
 import re
 import os
 import time
 import progressbar
-
-
-def get_statistical_features(graph, arch):
-    features = dict()
-    for feature_func in statistical_features:
-        features[feature_func.__name__] = dict()
-        for node in graph.nodes:
-            code = graph.nodes[node]['label']
-            features[feature_func.__name__][node] = float(feature_func(code, arch))
-    return features
-
-
-def get_structural_features(graph):
-    features = dict()
-    for feature_func in structural_features:
-        features[feature_func.__name__] = feature_func(graph)
-    return features 
-
-
-def create_acfg_from_file(file_path, arch):
-    graph = nx.drawing.nx_pydot.read_dot(file_path)
-
-    features_dict = get_statistical_features(graph, arch)
-    for feature_name in features_dict:
-        nx.set_node_attributes(graph, features_dict[feature_name], feature_name)
-
-    feature_dict = get_structural_features(graph)
-    for feature_name in feature_dict:
-        nx.set_node_attributes(graph, feature_dict[feature_name], feature_name)
-
-    return graph
+from utils.graph_utils import read_graph
+from utils.graph_utils import create_acfg_from_file
 
 
 def main(argv):
