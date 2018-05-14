@@ -37,7 +37,7 @@ def main(argv):
     with open(output_csv, 'w', newline='') as csvfile:
         csv_writer = csv.writer(csvfile, delimiter='\t', quotechar='\'', quoting=csv.QUOTE_MINIMAL)
         csv_writer.writerow(['dim{}'.format(x) for x in range(64)] + ['label'])
-        for d in data:                                                                                                       
+        for d in data:
             csv_writer.writerow(d[1].tolist() + [d[0]])
 
 
