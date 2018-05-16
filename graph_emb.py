@@ -8,7 +8,7 @@ import sys
 import shutil
 import csv
 import numpy as np
-from utils import _start_shell
+from utils.eval_utils import _start_shell
 from random import shuffle
 import pickle
 import argparse
