@@ -16,68 +16,8 @@ import subprocess
 import progressbar
 from datetime import datetime
 import glob
-
-
-def get_number_of_attribute():
-    from statistical_features import statistical_features
-    from structural_features import structural_features
-    return len(statistical_features) + len(structural_features)
-
-
-def sigma_function(input_l_v, P_n, relu_layer_num, batch_size, max_node_num, embedding_size):
-    # N: number of nodes
-    output = input_l_v # [B, N, p]
-    B, N, p = batch_size, max_node_num, embedding_size
-    for idx in range(relu_layer_num):
-        if idx > 0:
-            output = tf.nn.relu(output)
-        output = tf.reshape(output, [B * N, p]) # [B, N, p] -> [B * N, p]
-        output = tf.matmul(P_n[idx], output, transpose_b=True) # [p, p] x [B x N, p]^T = [p, B x N]
-        output = tf.transpose(output) # [B x N, p]
-        output = tf.reshape(output, [B, N, p]) # [B, N, p]
-    return output
-
-
-def build_emb_graph(neighbors, attributes, u_init, attributes_dim, emb_size, T, relu_layer_num):
-    # neighbors [B x N x N]
-    # attributes [B x N x d]
-    # u_init [B x N x p]
-    with tf.device('/gpu:0'):
-        # Static parameters which are shared by each cfg 
-        W1 = tf.get_variable("W1", [attributes_dim, emb_size], initializer=tf.random_normal_initializer(stddev=0.1)) # d x p
-        W2 = tf.get_variable("W2", [emb_size, emb_size], initializer=tf.random_normal_initializer(stddev=0.1)) # p x p
-        P_n = []
-        for idx in range(relu_layer_num):
-            P_n.append(tf.get_variable("P_n_{}".format(idx), [emb_size, emb_size], initializer=tf.random_normal_initializer(stddev=0.1)))
-
-        # Dynamic parameters for each cfg
-        u_v = u_init
-
-        B, N, p = tf.shape(u_v)[0], tf.shape(u_v)[1], tf.shape(u_v)[2]
-
-        for t in range(T):
-            l_vs = tf.matmul(neighbors, u_v) # [B, N, N] x [B, N, p] = [B, N, p]
-            sigma_output = sigma_function(l_vs, P_n, relu_layer_num, B, N, p) # [B, N, p]
-
-            # Batch-wised: W1 x attributes
-            attributes_reshaped = tf.reshape(attributes, [B * N, attributes_dim])
-            W1_mul_attributes = tf.reshape(tf.matmul(W1, attributes_reshaped, transpose_a=True, transpose_b=True), [B, N, p]) # [B, N, p]
-            
-            sigma_output_add_W1_mul_attributes = tf.add(W1_mul_attributes, sigma_output)            
-
-            u_v = tf.tanh(sigma_output_add_W1_mul_attributes) # [B, N, p]
-            # u_v = tf.nn.l2_normalize(u_v, 1)
-        u_v_sum = tf.reduce_sum(u_v, 1) # [B, p]
-        graph_emb = tf.transpose(tf.matmul(W2, u_v_sum, transpose_b=True)) # [p, p] x [B, p] = [p, B]
-        # graph_emb = tf.nn.l2_normalize(graph_emb, 1)
-    return graph_emb, W1, W2, P_n, u_v, W1_mul_attributes, sigma_output
-
-
-def shuffle_data(dataset):
-    data_size = len(dataset['sample'])
-    idx_list = [i for i in range(data_size)]
-    shuffle(idx_list)
-    return np.asarray(dataset['sample'])[idx_list], np.asarray(dataset['label'])[idx_list]
+from embedding_network import EmbeddingNetwork
+import scipy
 
 
 def normalize_data(samples):
@@ -90,14 +30,14 @@ def normalize_data(samples):
             'num_offspring': [],
             'num_string': [],
             'num_numeric_constant': []}
-     
+
     for attr_name in attr_names:
         for pair in samples:
             for i in range(2):
                 graph = pair[i]['graph']
                 for node_id in graph.nodes:
                     attr_names[attr_name].append(graph.nodes[node_id][attr_name])
-    attr_avg_std_map = {} 
+    attr_avg_std_map = {}
     for attr_name in attr_names:
         attr_avg_std_map[attr_name] = {}
         attr_avg_std_map[attr_name]['avg'] = np.average(attr_names[attr_name])
@@ -130,7 +70,7 @@ def get_graph_info_mat(graph, attr_avg_std_map, max_node_num, attributes_dim, em
     for idx in range(max_node_num):
         node_id = idx
         if node_id in undir_graph.nodes:
-            neighbor_ids = list(undir_graph.neighbors(node_id)) 
+            neighbor_ids = list(undir_graph.neighbors(node_id))
             neighbors.append(n_hot(max_node_num, neighbor_ids))
             attrs = []
             for attr_name in attr_names:
@@ -243,6 +183,9 @@ def main(argv):
     parser.add_argument('--Debug', dest='Debug', help='Debug mode on.', action='store_true')
     parser.add_argument('--no-Debug', dest='Debug', help='Debug mode off.', action='store_false')
     parser.set_defaults(Debug=False)
+    parser.add_argument('--Inference', dest='Inference', help='Inference mode on.', action='store_true')
+    parser.add_argument('--no-Inference', dest='Inference', help='Inference mode off.', action='store_false')
+    parser.set_defaults(Inference=False)
     parser.add_argument('--TSNE_Mode', dest='TSNE_Mode', help='T-SNE mode on', action='store_true')
     parser.add_argument('--no-TSNE_Mode', dest='TSNE_Mode', help='T-SNE mode off', action='store_false')
     parser.set_defaults(TSNE_Mode=False)
@@ -292,48 +235,55 @@ def main(argv):
     print('Building model graph...... [{}]'.format(str(datetime.now())))
     with tf.device('/cpu:0'):
         global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
-    with tf.variable_scope("siamese") as scope:
+
         # Build Training Graph
         neighbors_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum), name='neighbors_left') # B x N x N
         attributes_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim), name='attribute_left') # B x N x d
         u_init_left = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize), name='u_init_left') # B x N x p
-        graph_emb_left, W1, W2, P_n, u_left, W1_mul_X_left, sigma_output_left = build_emb_graph(neighbors_left, attributes_left, u_init_left, # N x p
-                                                                                                attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
-
-        scope.reuse_variables()
 
         neighbors_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum), name='neighbors_right') #B x N x N
         attributes_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim), name='attributes_right') # B x N x d
         u_init_right = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize), name='u_init_right') # B x N x p
-        graph_emb_right, W1, W2, P_n, u_right, W1_mul_X_right, sigma_output_right = build_emb_graph(neighbors_right, attributes_right, u_init_right, # N x p
-                                                                                                    attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
+
+        neighbors_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum), name='neighbors_test')
+        attributes_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim), name='attributes_test')
+        u_init_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize), name='u_init_test')
 
         label = tf.placeholder(tf.float32, shape=(None, ), name='label')
+
+    with tf.variable_scope("siamese") as scope:
+        embedding_network = EmbeddingNetwork(args.NumberOfRelu, args.MaxNodeNum, args.EmbeddingSize, args.AttrDims, args.T)
+        graph_emb_left = embedding_network.embed(neighbors_left, attributes_left, u_init_left)
+        scope.reuse_variables()
+        graph_emb_right = embedding_network.embed(neighbors_right, attributes_right, u_init_right)
 
         norm_emb_left = tf.nn.l2_normalize(graph_emb_left, 1)
         norm_emb_right = tf.nn.l2_normalize(graph_emb_right, 1)
         cos_similarity = tf.reduce_sum(tf.multiply(norm_emb_left, norm_emb_right), 1)
 
         # Paper's Loss
-        '''
         loss_op = tf.reduce_mean(tf.square(cos_similarity - label))
         accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.sign(cos_similarity), label), tf.float32)) / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
         positive_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity), tf.where(tf.equal(label, 1))), 1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, 1)))[0], tf.float32)
         positive_num = tf.shape(tf.where(tf.equal(label, 1)))[0]
         negative_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity), tf.where(tf.equal(label, -1))), -1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, -1)))[0], tf.float32)
         negative_num = tf.shape(tf.where(tf.equal(label, -1)))[0]
-        '''
         # End of Paper's Loss
 
         # Vic's Loss
-        loss_p = (1 + label) * (1 - cos_similarity) # loss is the degree
-        loss_n = (1 - label) * tf.cast(tf.greater(cos_similarity, 0.5), tf.float32) * (1 + cos_similarity - 0.5)
+        '''
+        loss_p = (1+label)*tf.cast(tf.equal(tf.mod(global_step,2),1),tf.float32)*(1-cos_similarity) # loss is the degree
+        loss_n = (1-label)*tf.cast(tf.equal(tf.mod(global_step,2),0),tf.float32)*tf.cast(tf.greater(cos_similarity, 0.5),tf.float32)*(1+ cos_similarity-0.5)
+
+        # loss_p = (1 + label) * (1 - cos_similarity) # loss is the degree
+        # loss_n = (1 - label) * tf.cast(tf.greater(cos_similarity, 0.5), tf.float32) * (1 + cos_similarity - 0.5)
         loss_op = tf.reduce_mean( tf.square(loss_p + loss_n) )
         accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.sign(cos_similarity - 0.5), label), tf.float32)) / tf.cast(tf.shape(neighbors_left)[0], tf.float32)
         positive_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - 0.5), tf.where(tf.equal(label, 1))), 1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, 1)))[0], tf.float32)
         positive_num = tf.shape(tf.where(tf.equal(label, 1)))[0]
         negative_accuracy = tf.reduce_sum(tf.cast(tf.equal(tf.gather(tf.sign(cos_similarity - 0.5), tf.where(tf.equal(label, -1))), -1), tf.float32)) / tf.cast(tf.shape(tf.where(tf.equal(label, -1)))[0], tf.float32)
         negative_num = tf.shape(tf.where(tf.equal(label, -1)))[0]
+        '''
         # End of Vic's Loss
 
         # Debug ops
@@ -341,22 +291,12 @@ def main(argv):
         correct_idx = tf.where(tf.equal(bingo, 1))
         incorrect_idx = tf.where(tf.equal(bingo, 0))
 
-
-
         # Bulid Inference Graph
-        neighbors_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum), name='neighbors_test')
-        attributes_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, attributes_dim), name='attributes_test')
-        u_init_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize), name='u_init_test')
-        graph_emb_inference, W1_inference, W2_inference, P_n_inference, u_v_inference, W1_mul_X_inference, sigma_output_inference = build_emb_graph(neighbors_test, attributes_test, u_init_test, attributes_dim, args.EmbeddingSize, args.T, args.NumberOfRelu)
+        graph_emb_inference = embedding_network.embed(neighbors_test, attributes_test, u_init_test)
         norm_graph_emb_inference = tf.nn.l2_normalize(graph_emb_inference, 1)
 
         # This is vic's loss function
         # loss_op = (1 + label) * (-0.5 + tf.sigmoid(tf.reduce_mean(tf.squared_difference(graph_emb_left, graph_emb_right)))) + (1 - label) * tf.square(1 + cos_similarity)
-        # Operations for debug
-        debug_ops = {'W1': W1, 'W2': W2, 'P_n': P_n, 'u_left': u_left, 'u_right': u_right,
-                     'W1_mul_X_left': W1_mul_X_left, 'W1_mul_X_right': W1_mul_X_right,
-                     'sigma_output_left': sigma_output_left, 'sigma_output_right': sigma_output_right}
-
     with tf.name_scope('Accuracy'):
         tf.summary.scalar('accuracy', accuracy)
         tf.summary.scalar('positive_accuracy', positive_accuracy)
@@ -367,7 +307,7 @@ def main(argv):
 
     train_op = tf.train.AdamOptimizer(args.LearningRate).minimize(loss_op, global_step=global_step)
     # train_op = tf.train.GradientDescentOptimizer(args.LearningRate).minimize(loss_op, global_step=global_step)
-    
+
     print('Preparing the data for the model...... [{}]'.format(str(datetime.now())))
     if args.TSNE_Mode:
         tsne_data = {'samples': None, 'labels': []}
@@ -398,6 +338,37 @@ def main(argv):
         else:
             init_op = tf.global_variables_initializer()
             sess.run(init_op)
+
+        if args.Inference:
+            sess.run(iterator.initializer, feed_dict={shuffle_seed: 0})
+            id_embs = {}
+            from numpy import linalg as LA
+            while True:
+                try:
+                    cur_neighbors_ls, cur_neighbors_rs, cur_attributes_ls, cur_attributes_rs, cur_u_init_ls, cur_u_init_rs, cur_labels, identifiers_left, identifiers_right = sess.run(next_element)
+                except:
+                    break
+                embs = sess.run(graph_emb_inference, {neighbors_test: cur_neighbors_ls, attributes_test: cur_attributes_ls, u_init_test: cur_u_init_ls})
+                for idx, id_ in enumerate(identifiers_left):
+                    id_embs[id_.decode('utf-8')] = embs[idx]
+                embs = sess.run(norm_graph_emb_inference, {neighbors_test: cur_neighbors_rs, attributes_test: cur_attributes_rs, u_init_test: cur_u_init_rs})
+                for idx, id_ in enumerate(identifiers_right):
+                    id_embs[id_.decode('utf-8')] = embs[idx]
+            while True:
+                choice = input('Please input id for inference: ')
+                chosen_emb = id_embs[choice]
+                pri = []
+                for id_ in id_embs:
+                    cos_sim = scipy.spatial.distance.cosine(chosen_emb, id_embs[id_])
+                    pri.append([id_, -(cos_sim - 1)])
+                pri.sort(key=lambda x: x[1])
+                for i in reversed(pri[-10:]):
+                    print(i[0], i[1])
+                print()
+
+            sys.exit(-1)
+
+
 
         if args.StartIPython:
             _start_shell(locals(), globals())
@@ -465,16 +436,25 @@ def main(argv):
                 try:
                     cur_neighbors_ls, cur_neighbors_rs, cur_attributes_ls, cur_attributes_rs, cur_u_init_ls, cur_u_init_rs, cur_labels, identifiers_left, identifiers_right = sess.run(next_element)
 
-                    _, loss, batch_acc, positive_acc, pos_num, negative_acc, neg_num = sess.run([train_op, loss_op, accuracy, positive_accuracy, positive_num, negative_accuracy, negative_num], {
+                    if args.UpdateModel:
+                        _ = sess.run(train_op, {
+                            neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
+                            neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
+                            label: cur_labels
+                        })
+
+                    loss, batch_acc, positive_acc, pos_num, negative_acc, neg_num = sess.run([loss_op, accuracy, positive_accuracy, positive_num, negative_accuracy, negative_num], {
                         neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
                         neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
                         label: cur_labels
                     })
 
-                    epoch_pos_sum += (positive_acc * pos_num)
-                    epoch_neg_sum += (negative_acc * neg_num)
-                    epoch_pos_num += pos_num
-                    epoch_neg_num += neg_num
+                    if pos_num != 0:
+                        epoch_pos_sum += (positive_acc * pos_num)
+                        epoch_pos_num += pos_num
+                    if neg_num != 0:
+                        epoch_neg_sum += (negative_acc * neg_num)
+                        epoch_neg_num += neg_num
 
                     if args.Debug:
                         if cur_epoch == 0:
@@ -491,7 +471,8 @@ def main(argv):
                             print('False count: ', false_count)
                             sys.exit(-1)
 
-                    sys.stdout.write('Epoch: {:6}, BatchLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f},TestAcc: {:.4f}  \r'.format(cur_epoch, loss, total_step, batch_acc, positive_acc, negative_acc, test_acc))
+                    sys.stdout.write('Epoch: {:6}, BatchLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f}, TestAcc: {:.4f} \r'.format(
+                                      cur_epoch  , loss              , total_step     , batch_acc       , positive_acc  , negative_acc  , test_acc))
                     sys.stdout.flush()
 
                     if args.UpdateModel:
@@ -518,7 +499,7 @@ def main(argv):
                         test_acc_summary = tf.Summary()
                         test_acc_summary.value.add(tag='Accuracy/test_accuracy', simple_value=test_acc)
                         train_writer.add_summary(test_acc_summary, total_step)
-                    print('Epoch: {:6}, BatchLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f},TestAcc: {:.4f}'.format(cur_epoch, loss, total_step, (epoch_pos_sum + epoch_neg_sum) / (epoch_pos_num + epoch_neg_num), epoch_pos_sum / epoch_pos_num, epoch_neg_sum / epoch_neg_num, test_acc))
+                    print('Epoch: {:6}, BatchLoss: {:8.7f}, TotalStep: {:7}, TrainAcc: {:.4f}, PosAcc: {:.4f}, NegAcc: {:.4f},TestAcc: {:.4f}                   '.format(cur_epoch, loss, total_step, (epoch_pos_sum + epoch_neg_sum) / (epoch_pos_num + epoch_neg_num), epoch_pos_sum / epoch_pos_num, epoch_neg_sum / epoch_neg_num, test_acc))
                     sys.stdout.flush()
                     cur_epoch += 1
                     epoch_pos_sum = 0
