@@ -37,9 +37,14 @@ def main(argv):
                         output_file = '{}.{}.exe'.format(output_path, arch)
                         # Only compile when the binary does not exist
                         if not os.path.isfile(output_file):
-                            compile_cmd = compile_cmds[arch].format(output=output_file, src=code_path)
-                            ret = subprocess.call(compile_cmd, shell=True)
-                            if ret != 0:
+                            success_compile = False
+                            for try_compile_cmd in compile_cmds[arch]:
+                                compile_cmd = try_compile_cmd.format(output=output_file, src=code_path)
+                                ret = subprocess.call(compile_cmd, shell=True)
+                                if ret == 0:
+                                    success_compile = True
+                                    break
+                            if not success_compile:
                                 print('!!!!! Failed to exec: {}\n Return code: {}\n'.format(compile_cmd, ret))
                                 continue
     
