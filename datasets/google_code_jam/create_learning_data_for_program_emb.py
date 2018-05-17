@@ -16,55 +16,7 @@ import traceback
 from config import archs
 from utils.graph_utils import extract_main_graph
 from utils.graph_utils import create_acfg_from_file
-
-
-def sigma_function(input_l_v, P_n, relu_layer_num, batch_size, max_node_num, embedding_size):
-    # N: number of nodes
-    output = input_l_v # [B, N, p]
-    B, N, p = batch_size, max_node_num, embedding_size
-    for idx in range(relu_layer_num):
-        if idx > 0:
-            output = tf.nn.relu(output)
-        output = tf.reshape(output, [B * N, p]) # [B, N, p] -> [B * N, p]
-        output = tf.matmul(P_n[idx], output, transpose_b=True) # [p, p] x [B x N, p]^T = [p, B x N]
-        output = tf.transpose(output) # [B x N, p]
-        output = tf.reshape(output, [B, N, p]) # [B, N, p]
-    return output
-
-
-def build_emb_graph(neighbors, attributes, u_init, attributes_dim, emb_size, T, relu_layer_num):
-    # neighbors [B x N x N]
-    # attributes [B x N x d]
-    # u_init [B x N x p]
-    with tf.device('/gpu:0'):
-        # Static parameters which are shared by each cfg 
-        W1 = tf.get_variable("W1", [attributes_dim, emb_size], initializer=tf.random_normal_initializer(stddev=0.5)) # d x p
-        W2 = tf.get_variable("W2", [emb_size, emb_size], initializer=tf.random_normal_initializer(stddev=0.5)) # p x p
-        P_n = []
-        for idx in range(relu_layer_num):
-            P_n.append(tf.get_variable("P_n_{}".format(idx), [emb_size, emb_size], initializer=tf.random_normal_initializer(stddev=0.1)))
-
-        # Dynamic parameters for each cfg
-        u_v = u_init
-
-        B, N, p = tf.shape(u_v)[0], tf.shape(u_v)[1], tf.shape(u_v)[2]
-
-        for t in range(T):
-            l_vs = tf.matmul(neighbors, u_v) # [B, N, N] x [B, N, p] = [B, N, p]
-            sigma_output = sigma_function(l_vs, P_n, relu_layer_num, B, N, p) # [B, N, p]
-
-            # Batch-wised: W1 x attributes
-            attributes_reshaped = tf.reshape(attributes, [B * N, attributes_dim])
-            W1_mul_attributes = tf.reshape(tf.matmul(W1, attributes_reshaped, transpose_a=True, transpose_b=True), [B, N, p]) # [B, N, p]
-            
-            sigma_output_add_W1_mul_attributes = tf.add(W1_mul_attributes, sigma_output)            
-
-            u_v = tf.tanh(sigma_output_add_W1_mul_attributes) # [B, N, p]
-            # u_v = tf.nn.l2_normalize(u_v, 1)
-        u_v_sum = tf.reduce_sum(u_v, 1) # [B, p]
-        graph_emb = tf.transpose(tf.matmul(W2, u_v_sum, transpose_b=True)) # [p, p] x [B, p] = [p, B]
-        # graph_emb = tf.nn.l2_normalize(graph_emb, 1)
-    return graph_emb, W1, W2, P_n, u_v, W1_mul_attributes, sigma_output
+from models.embedding_network import EmbeddingNetwork
 
 
 def normalize_data(samples):
@@ -270,11 +222,14 @@ def main(argv):
         print('MODEL_DIR folder should be a valid folder.')
         sys.exit(-2)
 
-    with tf.variable_scope("siamese") as scope:
+    with tf.device('/cpu:0'):
         neighbors_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.MaxNodeNum), name='neighbors_test')
         attributes_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.AttrDims), name='attributes_test')
         u_init_test = tf.placeholder(tf.float32, shape=(None, args.MaxNodeNum, args.EmbeddingSize), name='u_init_test')
-        graph_emb_inference, W1_inference, W2_inference, P_n_inference, u_v_inference, W1_mul_X_inference, sigma_output_inference = build_emb_graph(neighbors_test, attributes_test, u_init_test, args.AttrDims, args.EmbeddingSize, args.T, args.NumberOfRelu)
+
+    with tf.variable_scope("siamese") as scope:
+        embedding_network = EmbeddingNetwork(args.NumberOfRelu, args.MaxNodeNum, args.EmbeddingSize, args.AttrDims, args.T)
+        graph_emb_inference = embedding_network.embed(neighbors_test, attributes_test, u_init_test)
         norm_graph_emb_inference = tf.nn.l2_normalize(graph_emb_inference, 1)
 
     with tf.Session() as sess:

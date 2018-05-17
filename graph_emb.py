@@ -16,7 +16,7 @@ import subprocess
 import progressbar
 from datetime import datetime
 import glob
-from embedding_network import EmbeddingNetwork
+from models.embedding_network import EmbeddingNetwork
 import scipy
 
 
