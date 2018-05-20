@@ -197,7 +197,6 @@ def main(argv):
     parser.add_argument('SQLiteDB', help='Path to the sqlite db file contains information about ACFGs.')
     parser.add_argument('MODEL_DIR', help='The folder to save the model.')
     parser.add_argument('OutputPlk', help='Path to the output pickle file.')
-    parser.add_argument('TargetFolder', help='Path to the target folder that contains authors\' dir.')
     parser.add_argument('--PosNum', type=int, help='Number of positive samples.', required=True)
     parser.add_argument('--NegNum', type=int, help='Number of negative samples.', required=True)
     parser.add_argument('--TestPercent', type=int, help='Percentage of testing data.', required=True)
