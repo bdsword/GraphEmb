@@ -12,34 +12,40 @@ import progressbar
 
 
 def gdl_to_dot_process(q, lock, counter):
-    while True:
-        full_path = None
-        dot_file = None
-        try:
-            full_path, dot_file = q.get(True, 5)
-        except queue.Empty as e:
-            return
+    try:
+        while True:
+            full_path = None
+            dot_file = None
+            try:
+                full_path, dot_file = q.get(True, 5)
+            except queue.Empty as e:
+                return
 
-        try:
-            subprocess.call(['graph-easy', '--input', full_path, '--output', dot_file])
-        except:
-            print('!!! Failed to process {}. !!!'.format(full_path))
-            print('Unexpected exception in gdl_to_dot_process:\n {}'.format(traceback.format_exc()))
-            continue
-        counter.value += 1
+            try:
+                subprocess.call(['graph-easy', '--input', full_path, '--output', dot_file])
+            except:
+                print('!!! Failed to process {}. !!!'.format(full_path))
+                print('Unexpected exception in gdl_to_dot_process:\n {}'.format(traceback.format_exc()))
+                continue
+            counter.value += 1
+    except Exception as e:
+        print(e)
+        traceback.print_exc()
 
 
-def progressbar_process(q, lock, counter):
-    bar = progressbar.ProgressBar(max_value=progressbar.UnknownLength)
-    max_length = -1
-    while True:
-        if q.qsize() > max_length:
-            max_length = q.qsize()
-            bar.max_value = max_length
-        if q.qsize() == 0:
-            break
-        bar.update(counter.value)
-        time.sleep(0.1)
+def progressbar_process(q, lock, counter, max_length):
+    try:
+        bar = progressbar.ProgressBar(max_value=0)
+        while True:
+            if max_length.value > bar.max_value:
+                bar.max_value = max_length.value
+            if q.qsize() == 0:
+                break
+            bar.update(counter.value)
+            time.sleep(0.1)
+    except Exception as e:
+        print(e)
+        traceback.print_exc()
 
 
 def main(args):
@@ -51,18 +57,20 @@ def main(args):
     manager = multiprocessing.Manager()
     q = manager.Queue()
     counter = manager.Value('i', 0)
+    max_length = manager.Value('i', 0)
     lock = manager.Lock()
     p = multiprocessing.Pool()
 
     for i in range(args.NumOfProcess):
-        p.apply_async(gdl_to_dot_process, args=(q, lock, counter, ))
-    p.apply_async(progressbar_process, args=(q, lock, counter, ))
+        p.apply_async(gdl_to_dot_process, args=(q, lock, counter,))
+    p.apply_async(progressbar_process, args=(q, lock, counter, max_length,))
 
     for root, dirnames, filenames in os.walk(args.TargetDir):
         for filename in fnmatch.filter(filenames, '*.gdl'):
             full_path = os.path.join(root, filename)
             dot_file = os.path.splitext(full_path)[0] + '.dot'
             q.put((full_path, dot_file))
+            max_length.value += 1
 
     p.close()
     p.join()

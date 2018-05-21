@@ -17,48 +17,54 @@ from utils.graph_utils import read_graph
 from utils.graph_utils import create_acfg_from_file
 
 
-def progressbar_process(q, lock, counter):
-    bar = progressbar.ProgressBar(max_value=progressbar.UnknownLength)
-    max_length = -1
-    while True:
-        if q.qsize() > max_length:
-            max_length = q.qsize()
-            bar.max_value = max_length
-        if q.qsize() == 0:
-            break
-        bar.update(counter.value)
-        time.sleep(0.1)
+def progressbar_process(q, lock, counter, max_length):
+    try:
+        bar = progressbar.ProgressBar(max_value=0)
+        while True:
+            if max_length.value > bar.max_value:
+                bar.max_value = max_length.value
+            if q.qsize() == 0:
+                break
+            bar.update(counter.value)
+            time.sleep(0.1)
+    except Exception as e:
+        print(e)
+        traceback.print_exc()
 
 
 def create_acfg_process(q, lock, sqlite_path, counter):
-    TABLE_NAME = 'flow_graph_acfg'
-    conn = sqlite3.connect(sqlite_path)
-    cur = conn.cursor()
-    while True:
-        fpath = None
-        arch = None
-        try:
-            fpath, arch, binary_path, bin_name, function_name = q.get(True, 5)
-        except queue.Empty as e:
-            cur.close()
-            conn.close()
-            return
+    try:
+        TABLE_NAME = 'flow_graph_acfg'
+        conn = sqlite3.connect(sqlite_path)
+        cur = conn.cursor()
+        while True:
+            fpath = None
+            arch = None
+            try:
+                fpath, arch, binary_path, bin_name, function_name = q.get(True, 5)
+            except queue.Empty as e:
+                cur.close()
+                conn.close()
+                return
 
-        try:
-            acfg = create_acfg_from_file(fpath, arch)
-        except:
-            print('!!! Failed to process {}. !!!'.format(fpath))
-            print('Unexpected exception in list_function_names: {}'.format(traceback.format_exc()))
-            continue
+            try:
+                acfg = create_acfg_from_file(fpath, arch)
+            except:
+                print('!!! Failed to process {}. !!!'.format(fpath))
+                print('Unexpected exception in list_function_names: {}'.format(traceback.format_exc()))
+                continue
 
-        path_without_ext = os.path.splitext(fpath)[0]
-        acfg_path = path_without_ext + '.acfg.plk'
-        with open(acfg_path, 'wb') as f:
-            pickle.dump(acfg, f)
-        cur.execute('INSERT INTO {} (binary_path, bin_name, acfg_path, arch, function_name) VALUES ("{}", "{}", "{}", "{}", "{}");'
-                    .format(TABLE_NAME, binary_path, bin_name, acfg_path, arch, function_name))
-        conn.commit()
-        counter.value += 1
+            path_without_ext = os.path.splitext(fpath)[0]
+            acfg_path = path_without_ext + '.acfg.plk'
+            with open(acfg_path, 'wb') as f:
+                pickle.dump(acfg, f)
+            cur.execute('INSERT INTO {} (binary_path, bin_name, acfg_path, arch, function_name) VALUES ("{}", "{}", "{}", "{}", "{}");'
+                        .format(TABLE_NAME, binary_path, bin_name, acfg_path, arch, function_name))
+            conn.commit()
+            counter.value += 1
+    except Exception as e:
+        print(e)
+        traceback.print_exc()
 
 
 def main(argv):
@@ -86,6 +92,7 @@ def main(argv):
     manager = multiprocessing.Manager()
     q = manager.Queue()
     counter = manager.Value('i', 0)
+    max_length = manager.Value('i', 0)
     lock = manager.Lock()
     p = multiprocessing.Pool()
 
@@ -95,7 +102,7 @@ def main(argv):
 
     arch_maps = {'linux-armv4': 'arm', 'linux-mips32': 'mips',  'linux-x86_64-O0': 'x86_64_O0',  'linux-x86_64-O1': 'x86_64_O1',  'linux-x86_64-O2': 'x86_64_O2',  'linux-x86_64-O3': 'x86_64_O3'}
 
-    p.apply_async(progressbar_process, args=(q, lock, counter))
+    p.apply_async(progressbar_process, args=(q, lock, counter, max_length,))
 
     # Parse each file name pattern to extract arch, binary name(problem id)
     for binary_path in files:
@@ -112,6 +119,7 @@ def main(argv):
                 function_name = os.path.basename(fname)
                 bin_name = os.path.basename(binary_path)
                 q.put((fpath, arch, binary_path, bin_name, function_name))
+                max_length.value += 1
 
     p.close()
     p.join()
