@@ -62,7 +62,9 @@ def create_acfg_process(q, lock, sqlite_path, counter):
             cur.execute('INSERT INTO {} (binary_path, question, acfg_path, arch, function_name, author, contest) VALUES ("{}", "{}", "{}", "{}", "{}", "{}", "{}");'
                         .format(TABLE_NAME, binary_path, bin_name, acfg_path, arch, function_name, author_name, contest_name))
             conn.commit()
+            lock.acquire()
             counter.value += 1
+            lock.release()
     except Exception as e:
         print(e)
         traceback.print_exc()
@@ -97,12 +99,16 @@ def main(argv):
     counter = manager.Value('i', 0)
     max_length = manager.Value('i', 0)
     lock = manager.Lock()
-    p = multiprocessing.Pool()
+    processes = []
 
     num_process = args.NumOfProcesses
     for i in range(num_process):
-        p.apply_async(create_acfg_process, args=(q, lock, args.SQLiteFile, counter,))
-    p.apply_async(progressbar_process, args=(q, lock, counter, max_length,))
+        p = multiprocessing.Process(target=create_acfg_process, args=(q, lock, args.SQLiteFile, counter,))
+        p.start()
+        processes.append(p)
+    p = multiprocessing.Process(target=progressbar_process, args=(q, lock, counter, max_length,))
+    p.start()
+    processes.append(p)
 
     # Parse each file name pattern to extract arch, binary name(problem id)
     for binary_path in files:
@@ -128,8 +134,9 @@ def main(argv):
             path_without_ext = os.path.splitext(fpath)[0]
             q.put((fpath, arch, binary_path, bin_name, function_name, author_name, contest_name))
             max_length.value += 1
-    p.close()
-    p.join()
+
+    for proc in processes:
+        proc.join()
 
 
 if __name__ == '__main__':

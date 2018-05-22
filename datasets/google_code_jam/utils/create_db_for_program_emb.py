@@ -57,7 +57,9 @@ def fetch_program_process(q, lock, sqlite_path, counter):
             cur.execute('INSERT INTO {} (binary_path, year, question, arch, author, contest, max_node) VALUES ("{}", "{}", "{}", "{}", "{}", "{}", "{}");'
                         .format(TABLE_NAME, binary_path, year, bin_name, arch, author_name, contest_name, max_node_num))
             conn.commit()
+            lock.acquire()
             counter.value += 1
+            lock.release()
     except Exception as e:
         print(e)
         traceback.print_exc()
@@ -93,12 +95,16 @@ def main(argv):
     counter = manager.Value('i', 0)
     max_length = manager.Value('i', 0)
     lock = manager.Lock()
-    p = multiprocessing.Pool()
+    processes = []
 
     num_process = args.NumOfProcesses
     for i in range(num_process):
-        p.apply_async(fetch_program_process, args=(q, lock, args.SQLiteFile, counter,))
-    p.apply_async(progressbar_process, args=(q, lock, counter, max_length,))
+        p = multiprocessing.Process(target=fetch_program_process, args=(q, lock, args.SQLiteFile, counter,))
+        p.start()
+        processes.append(p)
+    p = multiprocessing.Process(target=progressbar_process, args=(q, lock, counter, max_length,))
+    p.start()
+    processes.append(p)
 
     for year in os.listdir(args.TargetFolder):
         year_dir = os.path.join(args.TargetFolder, year)
@@ -125,8 +131,9 @@ def main(argv):
 
                     q.put((binary_path, year, contest_name, author_name, bin_name, arch, functions_folder))
                     max_length.value += 1
-    p.close()
-    p.join()
+
+    for proc in processes:
+        proc.join()
 
 
 if __name__ == '__main__':

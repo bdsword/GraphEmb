@@ -27,7 +27,9 @@ def gdl_to_dot_process(q, lock, counter):
                 print('!!! Failed to process {}. !!!'.format(full_path))
                 print('Unexpected exception in gdl_to_dot_process:\n {}'.format(traceback.format_exc()))
                 continue
+            lock.acquire()
             counter.value += 1
+            lock.release()
     except Exception as e:
         print(e)
         traceback.print_exc()
@@ -59,11 +61,15 @@ def main(args):
     counter = manager.Value('i', 0)
     max_length = manager.Value('i', 0)
     lock = manager.Lock()
-    p = multiprocessing.Pool()
+    processes = []
 
     for i in range(args.NumOfProcess):
-        p.apply_async(gdl_to_dot_process, args=(q, lock, counter,))
-    p.apply_async(progressbar_process, args=(q, lock, counter, max_length,))
+        p = multiprocessing.Process(target=gdl_to_dot_process, args=(q, lock, counter,))
+        p.start()
+        processes.append(p)
+    p = multiprocessing.Process(target=progressbar_process, args=(q, lock, counter, max_length,))
+    p.start()
+    processes.append(p)
 
     for root, dirnames, filenames in os.walk(args.TargetDir):
         for filename in fnmatch.filter(filenames, '*.gdl'):
@@ -72,8 +78,8 @@ def main(args):
             q.put((full_path, dot_file))
             max_length.value += 1
 
-    p.close()
-    p.join()
+    for proc in processes:
+        proc.join()
 
 
 if __name__ == '__main__':

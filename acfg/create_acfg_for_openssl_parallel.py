@@ -94,15 +94,19 @@ def main(argv):
     counter = manager.Value('i', 0)
     max_length = manager.Value('i', 0)
     lock = manager.Lock()
-    p = multiprocessing.Pool()
+    processes = []
 
     num_process = args.NumOfProcesses
     for i in range(num_process):
-        p.apply_async(create_acfg_process, args=(q, lock, args.SQLiteFile, counter, ))
+        p = multiprocessing.Process(target=create_acfg_process, args=(q, lock, args.SQLiteFile, counter,))
+        p.start()
+        processes.append(p)
 
     arch_maps = {'linux-armv4': 'arm', 'linux-mips32': 'mips',  'linux-x86_64-O0': 'x86_64_O0',  'linux-x86_64-O1': 'x86_64_O1',  'linux-x86_64-O2': 'x86_64_O2',  'linux-x86_64-O3': 'x86_64_O3'}
 
-    p.apply_async(progressbar_process, args=(q, lock, counter, max_length,))
+    p = multiprocessing.Process(target=progressbar_process, args=(q, lock, counter, max_length,))
+    p.start()
+    processes.append(p)
 
     # Parse each file name pattern to extract arch, binary name(problem id)
     for binary_path in files:
@@ -121,8 +125,8 @@ def main(argv):
                 q.put((fpath, arch, binary_path, bin_name, function_name))
                 max_length.value += 1
 
-    p.close()
-    p.join()
+    for proc in processes:
+        proc.join()
 
 
 if __name__ == '__main__':

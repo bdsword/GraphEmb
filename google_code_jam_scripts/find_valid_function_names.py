@@ -93,11 +93,13 @@ def main(argv):
     manager = multiprocessing.Manager()
     q = manager.Queue()
     lock = manager.Lock()
-    p = multiprocessing.Pool()
+    processes = []
 
     num_process = 5
     for i in range(num_process):
-        p.apply_async(list_function_names, args=(q, lock))
+        p = multiprocessing.Process(target=list_function_names, args=(q, lock,))
+        p.start()
+        processes.append(p)
 
     valid_exts = ['.c', '.cc', '.cpp']
     for author_name in os.listdir(args.TargetFolder):
@@ -107,8 +109,9 @@ def main(argv):
             item_path = os.path.join(author_dir, item)
             if ext in valid_exts:
                 q.put(item_path)
-    p.close()
-    p.join()
+
+    for proc in processes:
+        proc.join()
 
 
 if __name__ == '__main__':
