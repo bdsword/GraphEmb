@@ -22,9 +22,15 @@ def gdl_to_dot_process(q, lock, counter):
                 return
 
             try:
-                subprocess.call(['graph-easy', '--input', full_path, '--output', dot_file])
+                output = subprocess.check_output(['graph-easy', '--input', full_path, '--output', dot_file])
+                if output.decode('utf-8', 'ignore') != '':
+                    raise subprocess.CalledProcessError('Failed to process: {}'.format(full_path))
+            except subprocess.CalledProcessError as e:
+                print('!!! Failed to process {}. !!!\n'.format(full_path))
+                print('Please check: $ graph-easy --input {} --output {}'.format(full_path, dot_file))
+                continue
             except:
-                print('!!! Failed to process {}. !!!'.format(full_path))
+                print('!!! Failed to process {}. !!!\n'.format(full_path))
                 print('Unexpected exception in gdl_to_dot_process:\n {}'.format(traceback.format_exc()))
                 continue
             lock.acquire()
