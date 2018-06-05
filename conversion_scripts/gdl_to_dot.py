@@ -41,14 +41,12 @@ def gdl_to_dot_process(q, lock, counter):
         traceback.print_exc()
 
 
-def progressbar_process(q, lock, counter, max_length):
+def progressbar_process(q, lock, counter, max_length, done):
     try:
         bar = progressbar.ProgressBar(max_value=0)
-        while True:
+        while done.value != 1:
             if max_length.value > bar.max_value:
                 bar.max_value = max_length.value
-            if q.qsize() == 0:
-                break
             bar.update(counter.value)
             time.sleep(0.1)
     except Exception as e:
@@ -66,6 +64,7 @@ def main(args):
     q = manager.Queue()
     counter = manager.Value('i', 0)
     max_length = manager.Value('i', 0)
+    done = manager.Value('i', 0)
     lock = manager.Lock()
     processes = []
 
@@ -73,9 +72,8 @@ def main(args):
         p = multiprocessing.Process(target=gdl_to_dot_process, args=(q, lock, counter,))
         p.start()
         processes.append(p)
-    p = multiprocessing.Process(target=progressbar_process, args=(q, lock, counter, max_length,))
-    p.start()
-    processes.append(p)
+    progress_p = multiprocessing.Process(target=progressbar_process, args=(q, lock, counter, max_length, done,))
+    progress_p.start()
 
     for root, dirnames, filenames in os.walk(args.TargetDir):
         for filename in fnmatch.filter(filenames, '*.gdl'):
@@ -86,6 +84,9 @@ def main(args):
 
     for proc in processes:
         proc.join()
+    done.value = 1
+    progress_p.join()
+
 
 
 if __name__ == '__main__':

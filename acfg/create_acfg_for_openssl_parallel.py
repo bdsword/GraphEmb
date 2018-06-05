@@ -17,14 +17,12 @@ from utils.graph_utils import read_graph
 from utils.graph_utils import create_acfg_from_file
 
 
-def progressbar_process(q, lock, counter, max_length):
+def progressbar_process(q, lock, counter, max_length, done):
     try:
         bar = progressbar.ProgressBar(max_value=0)
-        while True:
+        while done.value != 1:
             if max_length.value > bar.max_value:
                 bar.max_value = max_length.value
-            if q.qsize() == 0:
-                break
             bar.update(counter.value)
             time.sleep(0.1)
     except Exception as e:
@@ -93,6 +91,7 @@ def main(argv):
     q = manager.Queue()
     counter = manager.Value('i', 0)
     max_length = manager.Value('i', 0)
+    done = manager.Value('i', 0)
     lock = manager.Lock()
     processes = []
 
@@ -104,9 +103,8 @@ def main(argv):
 
     arch_maps = {'linux-armv4': 'arm', 'linux-mips32': 'mips',  'linux-x86_64-O0': 'x86_64_O0',  'linux-x86_64-O1': 'x86_64_O1',  'linux-x86_64-O2': 'x86_64_O2',  'linux-x86_64-O3': 'x86_64_O3'}
 
-    p = multiprocessing.Process(target=progressbar_process, args=(q, lock, counter, max_length,))
-    p.start()
-    processes.append(p)
+    progress_p = multiprocessing.Process(target=progressbar_process, args=(q, lock, counter, max_length, done,))
+    progress_p.start()
 
     # Parse each file name pattern to extract arch, binary name(problem id)
     for binary_path in files:
@@ -127,6 +125,8 @@ def main(argv):
 
     for proc in processes:
         proc.join()
+    done.value = 1
+    progress_p.join()
 
 
 if __name__ == '__main__':
