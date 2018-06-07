@@ -443,7 +443,7 @@ def main(argv):
                             label: cur_labels
                         })
 
-                    loss, batch_acc, positive_acc, pos_num, negative_acc, neg_num = sess.run([loss_op, accuracy, positive_accuracy, positive_num, negative_accuracy, negative_num], {
+                    cos_sim, loss, batch_acc, positive_acc, pos_num, negative_acc, neg_num = sess.run([cos_similarity, loss_op, accuracy, positive_accuracy, positive_num, negative_accuracy, negative_num], {
                         neighbors_left: cur_neighbors_ls, attributes_left: cur_attributes_ls, u_init_left: cur_u_init_ls,
                         neighbors_right: cur_neighbors_rs, attributes_right: cur_attributes_rs, u_init_right: cur_u_init_rs,
                         label: cur_labels
@@ -488,7 +488,9 @@ def main(argv):
                     if args.UpdateModel:
                         if os.path.isabs(args.MODEL_DIR):
                             relative_model_dir = os.path.relpath(args.MODEL_DIR, os.getcwd())
-                        saver.save(sess, os.path.join(relative_model_dir, 'model.ckpt'), global_step=global_step)
+                            saver.save(sess, os.path.join(relative_model_dir, 'model.ckpt'), global_step=global_step)
+                        else:
+                            saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=global_step)
                 except tf.errors.OutOfRangeError:
                     test_acc = sess.run(accuracy, {
                         neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
