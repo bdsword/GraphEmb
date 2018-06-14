@@ -15,11 +15,11 @@ import subprocess
 import progressbar
 from datetime import datetime
 from utils.eval_utils import _start_shell
+from features.statistical_features import statistical_features
+from features.structural_features import structural_features
 
 
 def get_number_of_attribute():
-    from statistical_features import statistical_features
-    from structural_features import structural_features
     return len(statistical_features) + len(structural_features)
 
 
