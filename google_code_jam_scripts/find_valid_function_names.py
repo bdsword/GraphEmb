@@ -48,7 +48,7 @@ def list_function_names(q, lock):
                         funcs_folder = os.path.splitext(bin_path)[0] + '_functions'
                         if os.path.isdir(funcs_folder):
                             for f in os.listdir(funcs_folder):
-                                if os.path.splitext(f)[1] != '.dot':
+                                if os.path.splitext(f)[1] != '.gdl':
                                     continue
                                 fpath = os.path.join(funcs_folder, f)
                                 extracted_func = os.path.splitext(f)[0]
