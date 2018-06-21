@@ -30,7 +30,6 @@ def main(argv):
     parser.add_argument('SQLiteDB', help='Path to the sqlite db file contains information about ACFGs.')
     parser.add_argument('PositivePoolPlk', help='Path to the pickle file contains positive samples.')
     parser.add_argument('OutputPlk', help='Path to the output pickle file.')
-    parser.add_argument('TargetFolder', help='Path to the target folder that contains authors\' dir.')
     parser.add_argument('--Seed', type=int, default=0, help='Seed to the random number generator.')
     parser.add_argument('--Archs', choices=archs, default=archs, nargs='*', help='Archs to be selected.')
     parser.add_argument('--AcceptMinNodeNum', type=int, help='Minimal number of nodes accepted. (Node number >= this arguments are accepted.)')

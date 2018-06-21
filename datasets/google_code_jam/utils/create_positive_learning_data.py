@@ -27,7 +27,6 @@ def main(argv):
     parser = argparse.ArgumentParser(description='Slice the whole dataset according to the sqlite fileinto train and test data.')
     parser.add_argument('SQLiteDB', help='Path to the sqlite db file contains information about ACFGs.')
     parser.add_argument('OutputPlk', help='Path to the output pickle file.')
-    parser.add_argument('TargetFolder', help='Path to the target folder that contains authors\' dir.')
     parser.add_argument('--Archs', choices=archs, default=archs, nargs='*', help='Archs to be selected.')
     parser.add_argument('--AcceptMinNodeNum', type=int, help='Minimal number of nodes accepted. (Node number >= this arguments are accepted.)')
     parser.add_argument('--AcceptMaxNodeNum', type=int, help='Maximal number of nodes accepted. (Node number <= this arguments are accepted.)')
@@ -68,12 +67,19 @@ def main(argv):
                     both_contain_fucs = list(set(available_funcs_left) & set(available_funcs_right))
                     if len(both_contain_fucs) <= 0:
                         continue
-                    arch1_list_path = os.path.join(args.TargetFolder, author, question + '.' + arch_pair[0] + '_functions', 'valid_func_list.txt')
+
+                    cur.execute('SELECT * FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}"'.format(TABLE_NAME, contest, author, question, arch_pair[0]))
+                    row = cur.fetchone()
+                    arch1_list_path = os.path.join(os.path.splitext(row['binary_path'])[0] + '_functions', 'valid_func_list.txt')
                     with open(arch1_list_path, 'r') as f:
                         arch1_valid_funcs = [l.strip().split(' ')[1] for l in f.readlines()]
-                    arch2_list_path = os.path.join(args.TargetFolder, author, question + '.' + arch_pair[1] + '_functions', 'valid_func_list.txt')
+
+                    cur.execute('SELECT * FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}"'.format(TABLE_NAME, contest, author, question, arch_pair[1]))
+                    row = cur.fetchone()
+                    arch2_list_path = os.path.join(os.path.splitext(row['binary_path'])[0] + '_functions', 'valid_func_list.txt')
                     with open(arch2_list_path, 'r') as f:
                         arch2_valid_funcs = [l.strip().split(' ')[1] for l in f.readlines()]
+
                     for func in both_contain_fucs:
                         if func not in arch1_valid_funcs or func not in arch2_valid_funcs:
                             continue
