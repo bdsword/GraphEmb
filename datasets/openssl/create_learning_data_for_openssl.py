@@ -42,7 +42,7 @@ def main(argv):
     cur = conn.cursor()
 
     cur.execute('SELECT DISTINCT bin_name FROM {}'.format(TABLE_NAME))
-    available_bins = [c[0] for c in cur.fetchall()]
+    available_bins = [c['bin_name'] for c in cur.fetchall()]
 
     num_positive = int(input('How many positive pair would you like to generate: '))
     num_negative = int(input('How many negative pair would you like to generate: '))
@@ -64,7 +64,7 @@ def main(argv):
 
         # Random pick two architecture
         cur.execute('SELECT DISTINCT arch FROM {} WHERE bin_name is "{}"'.format(TABLE_NAME, picked_bin))
-        available_archs = [a[0] for a in cur.fetchall()]
+        available_archs = [a['arch'] for a in cur.fetchall()]
         available_archs = list(set(available_archs) - (set(archs) - set(args.Archs)))
         if len(available_archs) < 2:
             continue
