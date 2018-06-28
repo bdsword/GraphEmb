@@ -57,55 +57,45 @@ def main(argv):
     bar = progressbar.ProgressBar(max_value=num_positive)
 
     used_pattern = {}
+
+    cur.execute('SELECT DISTINCT bin_name FROM {}'.format(TABLE_NAME))
+    available_bins = [b['bin_name'] for b in cur.fetchall()]
     count = 0
-    while count < num_positive:
-        # Random pick contest
-        picked_bin = available_bins[random.randrange(0, len(available_bins))]
+    for bin_name in available_bins:
+        cur.execute('SELECT DISTINCT function_name FROM {} WHERE bin_name is "{}"'.format(TABLE_NAME, bin_name))
+        available_funcs = [f['function_name'] for f in cur.fetchall()]
+        for func in available_funcs:
+            cur.execute('SELECT DISTINCT arch FROM {} WHERE bin_name is "{}" and function_name is "{}"'.format(TABLE_NAME, bin_name, func))
+            available_archs = [a['arch'] for a in cur.fetchall()]
+            available_archs = list(set(available_archs) - (set(archs) - set(args.Archs)))
+            if len(available_archs) < 2:
+                continue
 
-        # Random pick two architecture
-        cur.execute('SELECT DISTINCT arch FROM {} WHERE bin_name is "{}"'.format(TABLE_NAME, picked_bin))
-        available_archs = [a['arch'] for a in cur.fetchall()]
-        available_archs = list(set(available_archs) - (set(archs) - set(args.Archs)))
-        if len(available_archs) < 2:
-            continue
-        picked_arch_ids = random.sample(range(0, len(available_archs)), 2)
-        picked_arch_1 = available_archs[picked_arch_ids[0]]
-        picked_arch_2 = available_archs[picked_arch_ids[1]]
+            for arch_pair in itertools.combinations(available_archs, 2):
+                cur.execute('SELECT * FROM {} WHERE bin_name is "{}" and function_name is "{}" and arch is "{}"'.format(TABLE_NAME, bin_name, func, arch_pair[0]))
+                row = cur.fetchone()
+                graph_left = load_graph(row['acfg_path'])
+                data_pattern_left = '{}:{}:{}'.format(bin_name, arch_pair[0], func)
 
-        # Random pick one function
-        cur.execute('SELECT DISTINCT function_name FROM {} WHERE bin_name is "{}" and arch is "{}"'.format(TABLE_NAME, picked_bin, picked_arch_1))
-        available_funcs_left = [f['function_name'] for f in cur.fetchall()]
-        cur.execute('SELECT DISTINCT function_name FROM {} WHERE bin_name is "{}" and arch is "{}"'.format(TABLE_NAME, picked_bin, picked_arch_2))
-        available_funcs_right = [f['function_name'] for f in cur.fetchall()]
-        both_contain_fucs = list(set(available_funcs_left) & set(available_funcs_right))
-        picked_func = both_contain_fucs[random.randrange(0, len(both_contain_fucs))]
+                cur.execute('SELECT * FROM {} WHERE bin_name is "{}" and function_name is "{}" and arch is "{}"'.format(TABLE_NAME, bin_name, func, arch_pair[1]))
+                row = cur.fetchone()
+                graph_right = load_graph(row['acfg_path'])
+                data_pattern_right = '{}:{}:{}'.format(bin_name, arch_pair[1], func)
 
-        # Select the first record
-        cur.execute('SELECT * FROM {} WHERE bin_name is "{}" and arch is "{}" and function_name is "{}"'.format(TABLE_NAME, picked_bin, picked_arch_1, picked_func))
-        row = cur.fetchone()
-        graph_left = load_graph(row['acfg_path'])
-        data_pattern_left = '{}:{}:{}'.format(picked_bin, picked_arch_1, picked_func)
+                if args.AcceptMinNodeNum and (len(graph_left) < args.AcceptMinNodeNum or len(graph_right) < args.AcceptMinNodeNum):
+                    continue
 
-        # Select the second record
-        cur.execute('SELECT * FROM {} WHERE bin_name is "{}" and arch is "{}" and function_name is "{}"'.format(TABLE_NAME, picked_bin, picked_arch_2, picked_func))
-        row = cur.fetchone()
-        graph_right = load_graph(row['acfg_path'])
-        data_pattern_right = '{}:{}:{}'.format(picked_bin, picked_arch_2, picked_func)
+                if args.AcceptMaxNodeNum and (len(graph_left) > args.AcceptMaxNodeNum or len(graph_right) > args.AcceptMaxNodeNum):
+                    continue
 
-        if args.AcceptMinNodeNum and (len(graph_left) < args.AcceptMinNodeNum or len(graph_right) < args.AcceptMinNodeNum):
-            continue
+                positive_pool.append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}]) 
+                count += 1
+                if count >= num_positive:
+                    break
+                bar.update(count)
 
-        if args.AcceptMaxNodeNum and (len(graph_left) > args.AcceptMaxNodeNum or len(graph_right) > args.AcceptMaxNodeNum):
-            continue
-
-        # Check the pattern have not been used
-        if '{}_{}'.format(data_pattern_left, data_pattern_right) not in used_pattern and '{}_{}'.format(data_pattern_right, data_pattern_left) not in used_pattern:
-            # Append data pair to positive_pool
-            positive_pool.append([{'graph': graph_left, 'identifier': data_pattern_left}, {'graph': graph_right, 'identifier': data_pattern_right}]) 
-            count += 1
-            bar.update(count)
-            used_pattern['{}_{}'.format(data_pattern_left, data_pattern_right)] = 1
-            used_pattern['{}_{}'.format(data_pattern_right, data_pattern_left)] = 1
+    if count < num_positive:
+        print('Notice: the number of positive samples is smaller than expect')
 
     negative_pool = []
     cur.execute('SELECT * FROM {}'.format(TABLE_NAME))
