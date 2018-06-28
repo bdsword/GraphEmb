@@ -3,19 +3,19 @@ import tensorflow as tf
 
 
 class EmbeddingNetwork:
-    def __init__(self, relu_layer_num, max_node_num, embedding_size, attributes_dim, T):
+    def __init__(self, relu_layer_num, max_node_num, embedding_size, attributes_dim, T, trainable=True):
         self.relu_layer_num = relu_layer_num
         self.max_node_num = max_node_num
         self.embedding_size = embedding_size
         self.attributes_dim = attributes_dim
         self.T = T
 
-        self.W1 = tf.get_variable("W1", [self.attributes_dim, self.embedding_size], initializer=tf.random_normal_initializer(stddev=0.1)) # d x p
-        self.W2 = tf.get_variable("W2", [self.embedding_size, self.embedding_size], initializer=tf.random_normal_initializer(stddev=0.1)) # p x p
+        self.W1 = tf.get_variable("W1", [self.attributes_dim, self.embedding_size], initializer=tf.random_normal_initializer(stddev=0.1), trainable=trainable) # d x p
+        self.W2 = tf.get_variable("W2", [self.embedding_size, self.embedding_size], initializer=tf.random_normal_initializer(stddev=0.1), trainable=trainable) # p x p
         self.P_n = []
         for idx in range(self.relu_layer_num):
             self.P_n.append(tf.get_variable("P_n_{}".format(idx), [self.embedding_size, self.embedding_size],
-                                            initializer=tf.random_normal_initializer(stddev=0.1)))
+                                            initializer=tf.random_normal_initializer(stddev=0.1), trainable=trainable))
 
 
     def __sigma_function(self, input_l_v, batch_size):
