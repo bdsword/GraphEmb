@@ -50,7 +50,7 @@ class EmbeddingNetwork:
             u_v = tf.tanh(
                     tf.add(
                         tf.reshape(
-                            tf.matmul(self.W1, attributes_reshaped, transpose_a=True, transpose_b=True),
+                            tf.transpose(tf.matmul(self.W1, attributes_reshaped, transpose_a=True, transpose_b=True)),
                             [batch_size, self.max_node_num, self.embedding_size]),
                         sigma_output)
                   ) # [B, N, p]
