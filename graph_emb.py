@@ -229,7 +229,8 @@ def main(argv):
         test_filenames = find_tfrecord_for('test', args.TrainingDataDir)
         test_dataset = tf.data.TFRecordDataset(test_filenames)
         test_dataset = test_dataset.map(parse_example_function, num_parallel_calls=8)
-        test_iterator = test_dataset.make_one_shot_iterator()
+        test_dataset = test_dataset.batch(args.BatchSize)
+        test_iterator = test_dataset.make_initializable_iterator()
         test_next_element = test_iterator.get_next()
 
     print('Building model graph...... [{}]'.format(str(datetime.now())))
@@ -320,7 +321,7 @@ def main(argv):
         with open(args.TSNE_InputData, 'rb') as f_in:
             data = pickle.load(f_in)
             for sample in data:
-                neighbors, attributes, u_init = get_graph_info_mat(sample, attr_avg_std_map, args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
+                neighbors, attributes, u_init = get_graph_info_mat(sample, None, args.MaxNodeNum, attributes_dim, args.EmbeddingSize)
                 tsne_neighbors.append(neighbors)
                 tsne_attributes.append(attributes)
                 tsne_u_inits.append(u_init)
@@ -391,9 +392,16 @@ def main(argv):
             print('Writing metadata.csv file to {}...... [{}]'.format(metadata_path, str(datetime.now())))
             with open(metadata_path, 'w', newline='') as csvfile:
                 csv_writer = csv.writer(csvfile, delimiter='\t', quotechar='\'', quoting=csv.QUOTE_MINIMAL)
-                csv_writer.writerow(['dim{}'.format(x) for x in range(args.EmbeddingSize)] + ['label'])
+                csv_writer.writerow(['dim{}'.format(x) for x in range(args.EmbeddingSize)] + ['id', 'label'])
+                out_hash = []
                 for idx, emb in enumerate(tsne_data['samples']):
-                    csv_writer.writerow(emb + [tsne_data['labels'][idx]])
+                    label = tsne_data['labels'][idx]
+                    items = label.split(':')
+                    out_label = '{}:{}:{}'.format(items[0], items[1], items[3])
+                    if out_label not in out_hash:
+                        out_hash.append(out_label)
+                    id_idx = out_hash.index(out_label)
+                    csv_writer.writerow(emb + [id_idx, '"{}"'.format(label)])
             print('Generate embedding vectors successfully. To view the visualization, please run:\n$ ./create_tsne_projector.py {} {} YOUR_EMBEDDING_LOG_DIR'.format(emb_plk_path, metadata_path))
         else:
             print('Start in training mode. [{}]'.format(str(datetime.now())))
@@ -409,19 +417,7 @@ def main(argv):
             test_u_init_ls     = []
             test_u_init_rs     = []
             test_labels        = []
-            print('\tLoading testing dataset.... [{}]'.format(str(datetime.now())))
-            while True:
-                try:
-                    test_neighbors_l, test_neighbors_r, test_attributes_l, test_attributes_r, test_u_init_l, test_u_init_r, test_label, identifiers_left, identifiers_right = sess.run(test_next_element)
-                except tf.errors.OutOfRangeError:
-                    break
-                test_neighbors_ls.append(test_neighbors_l)
-                test_neighbors_rs.append(test_neighbors_r)
-                test_attributes_ls.append(test_attributes_l)
-                test_attributes_rs.append(test_attributes_r)
-                test_u_init_ls.append(test_u_init_l)
-                test_u_init_rs.append(test_u_init_r)
-                test_labels.append(test_label)
+
 
             cur_epoch = 0
             epoch_pos_sum = 0
@@ -492,11 +488,23 @@ def main(argv):
                         else:
                             saver.save(sess, os.path.join(args.MODEL_DIR, 'model.ckpt'), global_step=global_step)
                 except tf.errors.OutOfRangeError:
-                    test_acc = sess.run(accuracy, {
-                        neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
-                        neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
-                        label: test_labels
-                    })
+                    sess.run(test_iterator.initializer)
+                    test_acc_inc = 0
+                    test_num = 0
+                    while True:
+                        try:
+                            test_neighbors_ls, test_neighbors_rs, test_attributes_ls, test_attributes_rs, test_u_init_ls, test_u_init_rs, test_labels, identifiers_lefts, identifiers_rights = sess.run(test_next_element)
+                        except tf.errors.OutOfRangeError:
+                            break
+                        test_acc = sess.run(accuracy, {
+                            neighbors_left:  test_neighbors_ls, attributes_left : test_attributes_ls, u_init_left : test_u_init_ls,
+                            neighbors_right: test_neighbors_rs, attributes_right: test_attributes_rs, u_init_right: test_u_init_rs,
+                            label: test_labels
+                        })
+                        test_acc_inc += test_acc * len(test_labels)
+                        test_num += len(test_labels)
+
+                    test_acc = test_acc_inc / test_num
                     if args.UpdateModel:
                         test_acc_summary = tf.Summary()
                         test_acc_summary.value.add(tag='Accuracy/test_accuracy', simple_value=test_acc)
