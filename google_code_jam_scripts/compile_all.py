@@ -34,7 +34,7 @@ def main(argv):
 
                     for arch in archs:
                         output_path = os.path.join(author_dir, code_basename)
-                        output_file = '{}.{}.exe'.format(output_path, arch)
+                        output_file = '{}.{}.run'.format(output_path, arch)
                         # Only compile when the binary does not exist
                         if not os.path.isfile(output_file):
                             success_compile = False

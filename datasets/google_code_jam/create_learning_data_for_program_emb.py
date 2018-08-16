@@ -115,7 +115,7 @@ def build_func_embs(funcs_dot_dict, arch, sess, args, norm_graph_emb_inference, 
     for func in funcs_dot_dict:
         func_dot = funcs_dot_dict[func]
         if not os.path.isfile(func_dot):
-            print('{} does not exist.'.format(func_dot))
+            # print('{} does not exist.'.format(func_dot))
             embs = np.zeros(args.EmbeddingSize)
         else:
             dot_statinfo = os.stat(func_dot)
@@ -123,7 +123,7 @@ def build_func_embs(funcs_dot_dict, arch, sess, args, norm_graph_emb_inference, 
                 embs = np.zeros(args.EmbeddingSize)
             else:
                 path_without_ext = os.path.splitext(func_dot)[0]
-                acfg_plk = path_without_ext + '.maxnode{}_emb{}.acfg.plk'.format(args.MaxNodeNum, args.EmbeddingSize)
+                acfg_plk = path_without_ext + '.new_maxnode{}_emb{}.acfg.plk'.format(args.MaxNodeNum, args.EmbeddingSize)
 
                 # Try to create function ACFG pickled file if pickle file do not exist
                 if not os.path.isfile(acfg_plk):
@@ -169,7 +169,7 @@ def create_acg_by_row(row, sess, args, norm_graph_emb_inference, neighbors_test,
     cg_path = os.path.splitext(row['binary_path'])[0] + '.dot'
     funcs_dir = os.path.splitext(row['binary_path'])[0] + '_functions'
     acg_plk = os.path.splitext(row['binary_path'])[0] + '.maxnode{}_emb{}.acg.plk'.format(args.MaxNodeNum, args.EmbeddingSize)
-    cache_func_embs_plk = os.path.splitext(row['binary_path'])[0] + '.maxnode{}_emb{}.func_embs.plk'.format(args.MaxNodeNum, args.EmbeddingSize)
+    cache_func_embs_plk = os.path.splitext(row['binary_path'])[0] + '.new_maxnode{}_emb{}.func_embs.plk'.format(args.MaxNodeNum, args.EmbeddingSize)
 
     main_graph = extract_main_graph(cg_path)
     if len(main_graph) > args.MaxNodeNum:
@@ -273,42 +273,39 @@ def main(argv):
         if not args.PositivePool:
             positive_pool = []
             for contest in available_contests:
-                cur.execute('SELECT DISTINCT question FROM {} WHERE contest is "{}" and max_node <= {}'.format(TABLE_NAME, contest, args.MaxNodeNum))
+                cur.execute('SELECT DISTINCT question FROM {} WHERE contest is "{}" and max_node <= {} and arch is not "win" and arch is not "arm"'.format(TABLE_NAME, contest, args.MaxNodeNum))
                 available_questions = [q['question'] for q in cur.fetchall()]
-                for question in available_questions:
-                    cur.execute('SELECT DISTINCT author FROM {} WHERE contest is "{}" and question is "{}" and max_node <= {}'.format(TABLE_NAME, contest, question, args.MaxNodeNum))
-                    available_authors = [a['author'] for a in cur.fetchall()]
-                    for author_pair in itertools.combinations(available_authors, 2):
-                        cur.execute('SELECT DISTINCT arch FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and max_node <= {}'.format(TABLE_NAME, contest, author_pair[0], question, args.MaxNodeNum))
-                        available_archs_left = [a['arch'] for a in cur.fetchall()]
-                        cur.execute('SELECT DISTINCT arch FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and max_node <= {}'.format(TABLE_NAME, contest, author_pair[1], question, args.MaxNodeNum))
-                        available_archs_right = [a['arch'] for a in cur.fetchall()]
-                        for archs_pair in itertools.product(available_archs_left, available_archs_right):
-                            cur.execute('SELECT * FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}" and max_node <= {}'.format(TABLE_NAME, contest, author_pair[0], question, archs_pair[0], args.MaxNodeNum))
-                            row_left = cur.fetchone()
+                for idx, question in enumerate(available_questions):
+                    per_count = 0
+                    cur.execute('SELECT * FROM {} WHERE contest is "{}" and question is "{}" and max_node <= {} and arch is not "win" and arch is not "arm"'.format(TABLE_NAME, contest, question, args.MaxNodeNum))
+                    rows = cur.fetchall()
+                    if idx == len(available_questions) - 1:
+                        num_per_question = num_positive - (num_positive // len(available_questions)) * idx
+                    else:
+                        num_per_question = num_positive // len(available_questions)
+                    while per_count < num_per_question:
+                        sampled_rows = random.sample(rows, 2)
 
-                            cur.execute('SELECT * FROM {} WHERE contest is "{}" and author is "{}" and question is "{}" and arch is "{}" and max_node <= {}'.format(TABLE_NAME, contest, author_pair[1], question, archs_pair[1], args.MaxNodeNum))
-                            row_right = cur.fetchone()
+                        acg_left = create_acg_by_row(sampled_rows[0], sess, args, norm_graph_emb_inference, neighbors_test, attributes_test, u_init_test)
+                        if acg_left is None:
+                            continue
 
-                            acg_left = create_acg_by_row(row_left, sess, args, norm_graph_emb_inference, neighbors_test, attributes_test, u_init_test)
-                            if acg_left is None:
-                                continue
+                        acg_right = create_acg_by_row(sampled_rows[1], sess, args, norm_graph_emb_inference, neighbors_test, attributes_test, u_init_test)
+                        if acg_right is None:
+                            continue
+                        id_left = '{}:{}:{}:{}'.format(contest, question, sampled_rows[0]['author'], sampled_rows[0]['arch'])
+                        id_right = '{}:{}:{}:{}'.format(contest, question, sampled_rows[1]['author'], sampled_rows[1]['arch'])
+                        pos_sample = [{'graph': acg_left, 'identifier': id_left}, {'graph': acg_right, 'identifier': id_right}]
+                        positive_pool.append(pos_sample)
+                        count += 1
+                        per_count += 1
+                        bar.update(count)
+                        if count % 1000 == 0:
+                            with open('positive_pool.plk', 'wb') as f_out:
+                                pickle.dump(positive_pool, f_out)
 
-                            acg_right = create_acg_by_row(row_right, sess, args, norm_graph_emb_inference, neighbors_test, attributes_test, u_init_test)
-                            if acg_right is None:
-                                continue
 
-                            id_left = '{}:{}:{}:{}'.format(contest, author_pair[0], question, archs_pair[0])
-                            id_right = '{}:{}:{}:{}'.format(contest, author_pair[1], question, archs_pair[1])
-                            pos_sample = [{'graph': acg_left, 'identifier': id_left}, {'graph': acg_right, 'identifier': id_right}]
-                            positive_pool.append(pos_sample)
-                            count += 1
-                            if count % 100 == 0:
-                                with open('positive_program_pool.plk', 'wb') as f:
-                                    pickle.dump(positive_pool, f)
-                            bar.update(count)
-                            break # Only the first arch pair is used. In order to prevent duplicated arch
-
+        print('Generate negative files...')
         if args.NegativePool:
             with open(args.NegativePool, 'rb') as f:
                 negative_pool = pickle.load(f)
@@ -348,7 +345,7 @@ def main(argv):
                             neg_sample = [{'graph': acg_left, 'identifier': id_left}, {'graph': acg_right, 'identifier': id_right}]
                             negative_pool.append(neg_sample)
                             count += 1
-                            if count % 100 == 0:
+                            if count % 1000 == 0:
                                 with open('negative_program_pool.plk', 'wb') as f:
                                     pickle.dump(negative_pool, f)
                             bar.update(count)
